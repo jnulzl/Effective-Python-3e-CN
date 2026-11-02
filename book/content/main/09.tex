@@ -1,0 +1,2617 @@
+并发（concurrency）让计算机能够看似同时做许多不同的事。例如，在只有一个 CPU 核心的计算机上，操作系统会快速切换由单个处理器运行的是哪个程序。如此一来，它交错执行这些程序，制造出程序在同时运行的假象。
+
+与之相对，并行（parallelism）关注的是真正地同时做许多不同的事。拥有多个 CPU 核心的计算机，能够同时执行多个程序。每个 CPU 核心运行一个独立程序的指令，使每个程序在同一时刻都能向前推进。
+
+在单个程序内部，并发是一种工具，让程序员更容易解决某些类型的问题。并发程序支持许多独立的执行路径，包括独立的 I/O 流，以看似同时且相互独立的方式向前推进。
+
+并行与并发的关键区别在于加速比（speedup）。当程序中的两条独立执行路径并行地向前推进时，完成全部工作所需的时间减半；执行速度快了一倍。相比之下，并发程序可能看似并行地运行成千上万条独立的执行路径，却不会为总体工作带来任何加速。
+
+Python 让以多种风格编写并发程序变得容易。线程（thread）只支持相对较少的并发量，而异步协程（asynchronous coroutine）则能支撑数量庞大的并发函数。Python 也可以通过系统调用、子进程（subprocess）与 C 扩展来完成并行工作。但要让并发的 Python 代码真正并行运行，可能非常困难。重要的是，要理解在这些不同情境下如何最好地运用 Python。
+
+\section{Item 67: 用 subprocess 管理子进程}
+
+Python 拥有久经考验的库，可用于运行和管理子进程（child process）。这让 Python 成为粘合其他工具（例如命令行实用程序）的理想语言。当既有的 shell 脚本变得复杂时（随着时间推移它们经常会这样），为了可读性和可维护性而将其重写为 Python 是一个很自然的选择。
+
+Python 启动的子进程能够并行运行，使你可以借助 Python 用满机器上的所有 CPU 核心，并最大化程序的吞吐率。尽管 Python 本身可能受 CPU 限制（参见 Item 68（「用线程处理阻塞式 I/O；不要用于并行」）），但用 Python 来驱动和协调 CPU 密集型工作负载仍然很容易。
+
+Python 有很多运行子进程的方式（例如 \texttt{os.popen}、\texttt{os.exec*}），但管理子进程的最佳选择是使用内置模块 \texttt{subprocess}。用 \texttt{subprocess} 运行子进程很简单。这里我使用该模块的 \texttt{run} 便捷函数来启动一个进程、读取其输出，并验证它是否正常终止：
+
+\begin{codebox}[python]
+import subprocess
+result = subprocess.run(
+    ["echo", "Hello from the child!"],
+    capture_output=True,
+    encoding="utf-8",
+)
+result.check_returncode()  # 没有异常说明它正常退出了
+print(result.stdout)
+>>>
+Hello from the child!
+\end{codebox}
+
+注意：本条目中的示例假定你的系统上可用 \texttt{echo}、\texttt{sleep} 和 \texttt{openssl} 命令。在 Windows 上，情况可能并非如此。请参考本条目在线的完整示例代码，了解如何在 Windows 上运行这些代码片段的具体说明。
+
+子进程独立于其父进程——也就是 Python 解释器——运行。如果你使用 \texttt{Popen} 类（而非 \texttt{run} 函数）来创建子进程，就可以在 Python 做其他工作的同时，周期性地轮询子进程的状态：
+
+\begin{codebox}[python]
+proc = subprocess.Popen(["sleep", "1"])
+while proc.poll() is None:
+    print("Working...")
+    # 这里放一些耗时的操作
+    ...
+print("Exit status", proc.poll())
+>>>
+Working...
+Working...
+Working...
+Working...
+Exit status 0
+\end{codebox}
+
+将子进程与父进程解耦，可以让父进程腾出手来并行运行多个子进程。这里我通过一开始就用 \texttt{Popen} 把所有子进程一起启动来实现这一点：
+
+\begin{codebox}[python]
+import time
+start = time.perf_counter()
+sleep_procs = []
+for _ in range(10):
+    proc = subprocess.Popen(["sleep", "1"])
+    sleep_procs.append(proc)
+\end{codebox}
+
+之后，我可以等待它们完成 I/O 并用 \texttt{communicate} 方法结束它们：
+
+\begin{codebox}[python]
+for proc in sleep_procs:
+    proc.communicate()
+end = time.perf_counter()
+delta = end - start
+print(f"Finished in {delta:.3} seconds")
+>>>
+Finished in 1.01 seconds
+\end{codebox}
+
+如果这些进程按顺序运行，总延迟将是 10 秒或更多，而不是我测得的约 1 秒。
+
+你也可以把数据从 Python 程序管道传入子进程，并取回它的输出。这让你能利用许多其他程序来并行完成工作。例如，假设我想用 \texttt{openssl} 命令行工具加密一些数据。用命令行参数和 I/O 管道来启动子进程很简单：
+
+\begin{codebox}[python]
+import os
+def run_encrypt(data):
+    env = os.environ.copy()
+    env["password"] = "zf7ShyBhZOraQDdE/FiZpm/m/8f9X+M1"
+    proc = subprocess.Popen(
+        ["openssl", "enc", "-des3", "-pass", "env:password"],
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    proc.stdin.write(data)
+    proc.stdin.flush()  # 确保子进程收到输入
+    return proc
+\end{codebox}
+
+这里我把随机字节管道传入加密函数，但在实践中，这个输入管道的数据会来自用户输入、文件句柄、网络套接字等：
+
+\begin{codebox}[python]
+procs = []
+for _ in range(3):
+    data = os.urandom(10)
+    proc = run_encrypt(data)
+    procs.append(proc)
+\end{codebox}
+
+这些子进程并行运行并消耗它们的输入。这里我等待它们完成，然后取回它们的最终输出。如预期那样，输出是随机的加密字节：
+
+\begin{codebox}[python]
+for proc in procs:
+    out, _ = proc.communicate()
+    print(out[-10:])
+>>>
+b'\x02a_\xd3\xd3\x9a\xd0\x8f\x14|'
+b'S\x9c\x1a\x919\x9a-P\x0c\x1f'
+b'\x1a\x7f\x1e\xbf\xac\xe5A>\xa3\xdd'
+\end{codebox}
+
+也可以创建并行的进程链，就像 UNIX 管道那样，把一个子进程的输出接到另一个子进程的输入，依此类推。下面的函数把 \texttt{openssl} 命令行工具作为子进程启动，用来生成输入流的 Whirlpool 哈希：
+
+\begin{codebox}[python]
+def run_hash(input_stdin):
+    return subprocess.Popen(
+        ["openssl", "dgst", "-whirlpool", "-binary"],
+        stdin=input_stdin,
+        stdout=subprocess.PIPE,
+    )
+\end{codebox}
+
+现在我可以启动一组进程来加密数据，再启动另一组进程来随后对它们的加密输出做哈希。注意，我必须小心：启动这条子进程管道的 Python 解释器进程，是如何保留上游进程的 \texttt{stdout} 实例的：
+
+\begin{codebox}[python]
+encrypt_procs = []
+hash_procs = []
+for _ in range(3):
+    data = os.urandom(100)
+    encrypt_proc = run_encrypt(data)
+    encrypt_procs.append(encrypt_proc)
+    hash_proc = run_hash(encrypt_proc.stdout)
+    hash_procs.append(hash_proc)
+    # 确保子进程消费输入流，并且
+    # communicate() 方法不会无意中窃取
+    # 子进程的输入；同时让 SIGPIPE 传播到
+    # 下游进程死亡时的上游进程。
+    encrypt_proc.stdout.close()
+    encrypt_proc.stdout = None
+\end{codebox}
+
+子进程之间的 I/O 一旦它们启动就会自动进行。我只需要等待它们完成并打印最终输出：
+
+\begin{codebox}[python]
+for proc in encrypt_procs:
+    proc.communicate()
+    assert proc.returncode == 0
+for proc in hash_procs:
+    out, _ = proc.communicate()
+    print(out[-10:])
+    assert proc.returncode == 0
+>>>
+b'\xc6\n\x8a"cg\x85\xd2\x81|'
+b'\x14\r\xc6J\xb0\xb0\xbf\x0c2X'
+b'@\x90$\xcc\xc7\xf4\x08\x19Y\x0b'
+\end{codebox}
+
+如果我担心子进程永远不结束，或者不知何故阻塞在输入或输出 I/O 管道上，我可以把 \texttt{timeout} 参数传给 \texttt{communicate} 方法。如果子进程在指定时间段内没有结束，就会引发一个异常，从而给我机会去终止这个行为异常的子进程：
+
+\begin{codebox}[python]
+proc = subprocess.Popen(["sleep", "10"])
+try:
+    proc.communicate(timeout=0.1)
+except subprocess.TimeoutExpired:
+    proc.terminate()
+    proc.wait()
+print("Exit status", proc.poll())
+>>>
+Exit status -15
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 使用 \texttt{subprocess} 模块来运行子进程并管理它们的输入和输出流。
+\item 子进程与 Python 解释器并行运行，使你能够最大限度地利用 CPU 核心。
+\item 对于简单用法使用 \texttt{run} 便捷函数，对于类 UNIX 管道之类的高级用法使用 \texttt{Popen} 类。
+\item 使用 \texttt{communicate} 方法的 \texttt{timeout} 参数，以避免死锁（deadlock）和挂起的子进程。
+\end{itemize}
+
+\section{Item 68: 用线程处理阻塞式 I/O；不要用于并行}
+
+Python 的标准实现称为 CPython（CPython 解释器）。CPython 分两步运行 Python 程序。首先，它将源文本解析并编译为字节码（bytecode），这是一种以 8 位指令表示的底层程序形式（背景参见 Item 97（「依靠预编译字节码与文件系统缓存来改善启动时间」））。（从 Python 3.6 起，它在技术上变成了字码（wordcode），使用 16 位指令，但原理是一样的。）随后，CPython 使用一个基于栈的解释器来运行字节码。字节码解释器拥有一份状态，在 Python 程序执行期间必须保持连贯一致。CPython 通过一种称为全局解释器锁（GIL）的机制来维护这种连贯性。
+
+本质上，GIL 是一种互斥锁（mutex），它防止 CPython 受到抢占式多线程（preemptive multithreading）的影响——在这种多线程中，一个线程会通过打断另一个线程来夺取程序的控制权。如果这种打断发生在意料之外的时刻，就可能破坏解释器的状态（例如垃圾回收（GC）的引用计数）。GIL 阻止了这些打断，并确保每条字节码指令都能与 CPython 实现及其 C 扩展模块正确协作（背景参见 Item 96（「考虑使用扩展模块来最大化性能与易用性」））。
+
+GIL 有一个重要的负面副作用。在像 C++ 或 Java 这样的语言中，拥有多个执行线程意味着程序可以同时利用多个 CPU 核心。尽管 Python 支持多个执行线程，但 GIL 导致任意时刻只有一个线程能够向前推进。这意味着，当你指望用线程来做并行计算、为 Python 程序提速时，你会大失所望。
+
+例如，假设我想用 Python 做一些计算密集（computationally intensive）的事情。这里我用一个朴素的因数分解算法作为代表：
+
+\begin{codebox}[python]
+def factorize(number):
+    for i in range(1, number + 1):
+        if number % i == 0:
+            yield i
+\end{codebox}
+
+串行地对一组 16 个数字做因数分解要花相当长的时间：
+
+\begin{codebox}[python]
+import time
+numbers = [7775876, 6694411, 5038540, 5426782,
+           9934740, 9168996, 5271226, 8288002,
+           9403196, 6678888, 6776096, 9582542,
+           7107467, 9633726, 5747908, 7613918]
+start = time.perf_counter()
+for number in numbers:
+    list(factorize(number))
+end = time.perf_counter()
+delta = end - start
+print(f"Took {delta:.3f} seconds")
+>>>
+Took 3.304 seconds
+\end{codebox}
+
+在其他语言里，用多个线程来做这个计算是合理的，因为我可以利用计算机的所有 CPU 核心。让我在 Python 里试一试。这里我定义一个 Python 线程类，用来执行与之前相同的计算：
+
+\begin{codebox}[python]
+from threading import Thread
+class FactorizeThread(Thread):
+    def __init__(self, number):
+        super().__init__()
+        self.number = number
+    def run(self):
+        self.factors = list(factorize(self.number))
+\end{codebox}
+
+接着，我为每个要分解的数字启动一个线程，让它们并行运行：
+
+\begin{codebox}[python]
+start = time.perf_counter()
+threads = []
+for number in numbers:
+    thread = FactorizeThread(number)
+    thread.start()
+    threads.append(thread)
+\end{codebox}
+
+最后，我等待所有线程结束：
+
+\begin{codebox}[python]
+for thread in threads:
+    thread.join()
+end = time.perf_counter()
+delta = end - start
+print(f"Took {delta:.3f} seconds")
+>>>
+Took 3.293 seconds
+\end{codebox}
+
+令人意外的是，这花费的时间与串行运行 \texttt{factorize} 几乎完全一样。每个数字一个线程——本例中总共有 16 个线程——在其它语言里，考虑到创建线程并与之协调的开销，你可能预期提速不到 16x。在我用来运行这段代码的 8 核机器上，你可能也只预期 8x 提速。但你不会预期：在有多颗 CPU 可用时，这些线程的性能看起来毫无改善。这展示了 GIL（例如锁竞争、调度开销）对运行在标准 CPython 解释器中的程序的影响。
+
+有一些办法能让 CPython 利用多个核心，但它们无法与标准的 \texttt{Thread} 类（Thread 类）配合使用（参见 Item 79（「考虑用 \texttt{concurrent.futures} 实现真正的并行」）和 Item 94（「知道何时以及如何用另一种编程语言替代 Python」）），而且这些方法可能需要相当大的工作量。
+
+注意：从 CPython 3.13 版开始，有一个实验性选项可以编译不带 GIL 的 Python，从而让程序避开其约束。这能改善多线程下的并行性能，但也有显著的缺点：许多 C 扩展模块和常用库尚未兼容这种行为；而且由于同步开销，单个线程的线性执行性能会下降。这一实验在后续版本中会如何发展，将十分值得关注。
+
+鉴于这些限制，Python 为什么还要支持线程呢？原因有二。
+
+首先，多个线程让程序很容易看起来像是在同时做多件事。自己实现这种同时处理多项任务的「杂耍」是困难的（示例参见 Item 71（「知道如何识别何时需要并发」））。有了线程，你可以把并发运行你的函数这件事交给 Python 去处理。这之所以可行，是因为 CPython 保证了各 Python 执行线程之间一定程度的公平性（fairness），尽管受 GIL 限制，任意时刻只有一个线程在向前推进。
+
+Python 支持线程的第二个原因，是为了应对阻塞式 I/O（blocking I/O），它发生在 Python 执行某些类型的系统调用时。Python 程序通过系统调用来请求计算机的操作系统与外部环境交互、代其行事。阻塞式 I/O 包括读写文件、与网络交互、与显示器等设备通信等。线程通过把程序与操作系统响应请求所需的延迟隔离开来，来帮助处理阻塞式 I/O。
+
+例如，假设我想通过串口向一台无线电遥控直升机发送信号。我将用一个缓慢的系统调用（\texttt{select}）来代表这一活动。该函数会请求操作系统阻塞 0.1 秒，然后把控制权交还我的程序，这与使用同步串口时会发生的情况类似：
+
+\begin{codebox}[python]
+import select
+import socket
+def slow_systemcall():
+    select.select([socket.socket()], [], [], 0.1)
+\end{codebox}
+
+串行地运行这个系统调用，所需时间会线性增长——5 次调用大约需要 0.5 秒：
+
+\begin{codebox}[python]
+start = time.perf_counter()
+for _ in range(5):
+    slow_systemcall()
+end = time.perf_counter()
+delta = end - start
+print(f"Took {delta:.3f} seconds")
+>>>
+Took 0.525 seconds
+\end{codebox}
+
+问题在于，当 \texttt{slow\_systemcall} 函数运行时，我的程序无法取得任何其它进展。我的程序的主执行线程阻塞在了 \texttt{select} 系统调用上。这种情况在实践中很糟。我需要在向直升机发送信号的同时，计算出它的下一步移动；否则它就会坠毁。当你发现自己需要像这样同时做阻塞式 I/O 和计算时，就该考虑把系统调用移到线程中去了。
+
+这里我在独立的多个线程中多次调用 \texttt{slow\_systemcall} 函数。这让我能同时与多个串口（和直升机）通信，同时让主线程去做任何所需的计算：
+
+\begin{codebox}[python]
+start = time.perf_counter()
+threads = []
+for _ in range(5):
+    thread = Thread(target=slow_systemcall)
+    thread.start()
+    threads.append(thread)
+\end{codebox}
+
+线程启动后，这里我在等待系统调用线程结束之前，做一些工作来计算直升机的下一步移动：
+
+\begin{codebox}[python]
+def compute_helicopter_location(index):
+    ...
+for i in range(5):
+    compute_helicopter_location(i)
+for thread in threads:
+    thread.join()
+end = time.perf_counter()
+delta = end - start
+print(f"Took {delta:.3f} seconds")
+>>>
+Took 0.106 seconds
+\end{codebox}
+
+并行时间比前面示例代码中的串行时间少了约 5x。这表明，尽管受 GIL 限制，所有系统调用仍会由多个 Python 线程并行运行。GIL 阻止我的 Python 代码并行运行，但它对系统调用没有影响。Python 线程会在发起系统调用之前立刻释放 GIL，并在系统调用一结束就重新获取 GIL。
+
+除了使用线程，还有许多其他方式来处理阻塞式 I/O，例如使用内置模块 \texttt{asyncio}，而且这些替代方案有重要好处。但这些选项可能需要额外的工作来重构你的代码，以适配不同的执行模型（参见 Item 75（「用协程实现高度并发的 I/O」）和 Item 77（「混合线程与协程，以平滑过渡到 \texttt{asyncio}」））。使用线程是以最小改动实现并行阻塞式 I/O 的最简单方式。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 线程无法在多个 CPU 核心上并行运行，因为全局解释器锁（GIL）的存在。
+\item 尽管有 GIL，Python 线程仍然有用，因为它们提供了一种简便的方式，让程序看似能在同一时间做多件事。
+\item 你可以用 Python 线程并行发起多个系统调用，从而让你在进行计算的同时进行阻塞式 I/O。
+\end{itemize}
+
+\section{Item 69: 用 Lock 防止线程中的数据竞争}
+
+在了解了全局解释器锁（GIL）（参见 Item 68（「用线程处理阻塞式 I/O；不要用于并行」））之后，许多 Python 新手程序员会以为，他们可以干脆在自己的代码里完全不使用互斥锁（mutual-exclusion lock，也称 mutex）。既然 GIL 已经阻止 Python 线程在多个 CPU 核心上并行运行，那它必然也充当了程序数据结构的锁，对吧？在一些类型（如列表（list）和字典（dict））上做测试，甚至可能显示这个假设看似成立。
+
+但是当心：事实并非如此。GIL 不会保护你。尽管任意时刻只有一个 Python 线程在运行，但一个线程对数据结构的操作，可能在 Python 解释器中的任意两条字节码指令之间被中断。如果你从多个线程同时访问同一批对象，这就很危险。由于这些中断，你的数据结构的不变式（invariant）几乎可能在任何时候被违反，从而可能让你的程序陷入损坏的状态。
+
+例如，假设我想写一个程序来并行地计数很多东西，比如从一个传感器网络采样光线强度。设想每个传感器都有自己专属的工作线程（worker thread），因为从传感器读取数据需要阻塞式 I/O。在每次传感器测量之后，工作线程会用收到的光子数量去递增一个共享的计数器（counter）变量：
+
+\begin{codebox}[python]
+counter = 0
+def read_sensor(sensor_index):
+    # Returns sensor data or raises an exception
+    ...
+def get_offset(data):
+    # Always returns 1 or greater
+    ...
+def worker(sensor_index, how_many):
+    global counter
+    for _ in range(how_many):
+        data = read_sensor(sensor_index)
+        counter += get_offset(data)
+\end{codebox}
+
+这里我为每个传感器并行运行一个 \texttt{worker} 线程，并等待它们全部完成读数：
+
+\begin{codebox}[python]
+from threading import Thread
+how_many = 10**6
+sensor_count = 4
+threads = []
+for i in range(sensor_count):
+    thread = Thread(target=worker, args=(i, how_many))
+    threads.append(thread)
+    thread.start()
+for thread in threads:
+    thread.join()
+expected = how_many * sensor_count
+print(f"Counter should be {expected}, got {counter}")
+>>>
+Counter should be 4000000, got 1980032
+\end{codebox}
+
+鉴于 \texttt{get\_offset} 总是返回 1 或更大的值，结果看起来差得太离谱了！这里发生了什么？这么简单的东西怎么可能出这么大的错，尤其是考虑到由于 GIL，任意时刻只能有一个 Python 解释器线程在运行？
+
+答案是抢占（preemption）。Python 解释器在所有正在执行的线程之间强制实行公平性（fairness），以确保它们获得大致相等的处理时间。为此，Python 会在一个线程运行时挂起它，再依次恢复另一个线程。问题在于，你无法确切知道 Python 会在何时挂起你的线程。一个线程甚至可能在看起来像是原子操作的中途被暂停。
+
+正是在这里，上述 \texttt{worker} 函数的这一行发生了这种情况：
+
+\begin{codebox}[python]
+counter += get_offset(data)
+\end{codebox}
+
+在 \texttt{counter} 变量上使用的 \texttt{+=} 运算符，实际上是在幕后指示 Python 执行三个独立的操作。上面的语句等价于下面这样：
+
+\begin{codebox}[python]
+value = counter
+delta = get_offset(data)
+result = value + delta
+counter = result
+\end{codebox}
+
+递增计数器的 Python 线程，可能在上述任意两个操作之间被挂起。如果各操作交错（interleave）的方式，导致 \texttt{value} 的旧版本被赋回给计数器，问题就来了。下面是一个线程 A 和 B 之间不良交互的例子：
+
+\begin{codebox}[python]
+# Running in Thread A
+value_a = counter
+delta_a = get_offset(data_a)
+# Context switch to Thread B
+value_b = counter
+delta_b = get_offset(data_b)
+result_b = value_b + delta_b
+counter = result_b
+# Context switch back to Thread A
+result_a = value_a + delta_a
+counter = result_a
+\end{codebox}
+
+线程 B 在线程 A 完全结束之前打断了它。线程 B 运行并完成，但随后线程 A 在执行中途恢复，覆盖了线程 B 在递增计数器上的全部进展。这正是上面光线传感器例子中发生的情况。
+
+为了防止这类数据竞争（data race），以及其它形式的数据结构损坏，Python 在内置模块 \texttt{threading} 中提供了一整套健壮的工具。其中最简单也最有用的是 \texttt{Lock} 类，一种互斥锁（mutex）。
+
+通过使用锁，我可以让 \texttt{Counter} 类保护其当前值免受多个线程的并发访问。任意时刻只能有一个线程能获取该锁。这里我用 \texttt{with} 语句来获取并释放锁；多出来的一层缩进让我们可以更清楚地看到，哪些代码是在持锁期间执行的（背景参见 Item 82（「考虑用 \texttt{contextlib} 和 \texttt{with} 语句实现可复用的 \texttt{try}/\texttt{finally} 行为」））：
+
+\begin{codebox}[python]
+from threading import Lock
+counter = 0
+counter_lock = Lock()
+def locking_worker(sensor_index, how_many):
+    global counter
+    for _ in range(how_many):
+        data = read_sensor(sensor_index)
+        with counter_lock:                  # Added
+            counter += get_offset(data)
+\end{codebox}
+
+现在我和之前一样运行传感器线程，但改用 \texttt{locking\_worker}：
+
+\begin{codebox}[python]
+for i in range(sensor_count):
+    thread = Thread(target=locking_worker, args=(i, how_many))
+    threads.append(thread)
+    thread.start()
+for thread in threads:
+    thread.join()
+expected = how_many * sensor_count
+print(f"Counter should be {expected}, got {counter}")
+>>>
+Counter should be 4000000, got 4000000
+\end{codebox}
+
+结果正是我所预期的。 \texttt{Lock} 解决了这个问题。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 尽管 Python 有全局解释器锁（GIL），你仍然有责任防止自己程序中的线程之间发生数据竞争。
+\item 如果你允许多个线程在没有互斥锁（mutex）的情况下修改同一批对象，你的程序就会损坏其数据结构。
+\item 使用内置模块 \texttt{threading} 中的 \texttt{Lock} 类，来在多个线程之间强制维护程序的不变式（invariant）。
+\end{itemize}
+
+\section{Item 70: 使用 \texttt{Queue} 协调线程之间的工作}
+
+需要并发执行许多任务的 Python 程序，常常需要协调它们的工作。对于并发工作来说，最有用的一种组织方式就是函数流水线（pipeline）。
+
+流水线的工作原理类似于制造业中使用的装配线。流水线的多个阶段（phase）串行（serial）排列，每个阶段对应一个特定的函数。新的工作任务不断地被加入到流水线的开端。各个函数可以并发地运行，各自处理所处阶段的那份工作。随着每个函数依次完成，工作便不断向前推进，直到没有剩余阶段为止。这种方式特别适合包含阻塞式 I/O（blocking I/O）或子进程（subprocess）的工作——这些活动很容易用 Python 并行化（参见 Item 67（"使用 \texttt{subprocess} 管理子进程"）以及 Item 68（"用线程处理阻塞式 I/O；不要用于并行"））。
+
+举例来说，假设我想构建一个系统，它能持续不断地从数码相机获取图像流，调整其大小，然后上传到一个在线相册。这样的程序可以被拆分成流水线的三个阶段。第一阶段负责获取新的图像。下载得到的图像在第二阶段经过调整大小的函数处理。调整大小后的图像在最后一个阶段被上传函数消费（consume）。
+
+假设我已经写好了执行这些阶段的 Python 函数：\texttt{download}、\texttt{resize} 和 \texttt{upload}。我该如何把这些阶段组装成一条能够并发工作的流水线呢？
+
+\begin{codebox}[python]
+def download(item):
+    ...
+def resize(item):
+    ...
+def upload(item):
+    ...
+\end{codebox}
+
+我首先需要的是一种在流水线各个阶段之间移交工作的方式。这可以建模为一个线程安全（thread-safe）的生产者—消费者队列（producer–consumer queue）（要了解 Python 中线程安全的重要性，参见 Item 69（"使用 \texttt{Lock} 防止线程中的数据竞争"）；要了解队列的性能，参见 Item 103（"优先使用 \texttt{deque} 实现生产者—消费者队列"））：
+
+\begin{codebox}[python]
+from collections import deque
+from threading import Lock
+class MyQueue:
+    def __init__(self):
+        self.items = deque()
+        self.lock = Lock()
+\end{codebox}
+
+生产者（producer），也就是我的数码相机，把新的图像添加到待处理条目的 \texttt{deque} 末尾：
+
+\begin{codebox}[python]
+    def put(self, item):
+        with self.lock:
+            self.items.append(item)
+\end{codebox}
+
+消费者（consumer），也就是处理流水线的第一阶段，从待处理条目的 \texttt{deque} 前端取出图像：
+
+\begin{codebox}[python]
+    def get(self):
+        with self.lock:
+            return self.items.popleft()
+\end{codebox}
+
+在这里，我把流水线的每个阶段表示为一个 Python 线程（thread），它从这样一个队列中取出工作，对其运行某个函数，再把结果放到另一个队列中。我还记录了工作线程检查新输入的次数，以及它已完成的工作量：
+
+\begin{codebox}[python]
+from threading import Thread
+import time
+class Worker(Thread):
+    def __init__(self, func, in_queue, out_queue):
+        super().__init__()
+        self.func = func
+        self.in_queue = in_queue
+        self.out_queue = out_queue
+        self.polled_count = 0
+        self.work_done = 0
+\end{codebox}
+
+最棘手的地方在于，工作线程必须妥善处理输入队列为空的情况——因为前一个阶段还没有完成它的工作。这种情况发生在下面我捕获 \texttt{IndexError} 异常的地方。你可以把它想象成装配线上的堵塞：
+
+\begin{codebox}[python]
+    def run(self):
+        while True:
+            self.polled_count += 1
+            try:
+                item = self.in_queue.get()
+            except IndexError:
+                time.sleep(0.01)  # 没有可做的任务
+            else:
+                result = self.func(item)
+                self.out_queue.put(result)
+                self.work_done += 1
+\end{codebox}
+
+现在我可以通过为各个协调点创建队列以及相应的工作线程，把三个阶段连接起来：
+
+\begin{codebox}[python]
+download_queue = MyQueue()
+resize_queue = MyQueue()
+upload_queue = MyQueue()
+done_queue = MyQueue()
+threads = [
+    Worker(download, download_queue, resize_queue),
+    Worker(resize, resize_queue, upload_queue),
+    Worker(upload, upload_queue, done_queue),
+]
+\end{codebox}
+
+我可以启动这些线程，然后向流水线的第一阶段注入一大批工作。这里我用一个普通的 \texttt{object} 实例来充当 \texttt{download} 函数所需真实数据的代理：
+
+\begin{codebox}[python]
+for thread in threads:
+    thread.start()
+for _ in range(1000):
+    download_queue.put(object())
+\end{codebox}
+
+现在我等待流水线的所有条目都被处理完，最终进入 \texttt{done\_queue}：
+
+\begin{codebox}[python]
+while len(done_queue.items) < 1000:
+    # 等待时做一些有用的事
+    ...
+\end{codebox}
+
+这段程序能够正常运行，但线程为了寻找新工作而不断轮询（poll）输入队列，却带来了一个有趣的副作用。在我捕获 \texttt{run} 方法中的 \texttt{IndexError} 异常的那段棘手代码里，这个分支会被执行非常多次：
+
+\begin{codebox}[python]
+processed = len(done_queue.items)
+polled = sum(t.polled_count for t in threads)
+print( f"Processed {processed} items after "
+f"polling {polled} times")
+>>>
+Processed 1000 items after polling 3033 times
+\end{codebox}
+
+当各个工作函数的速度互不相同时，较早的阶段可能会阻碍后面阶段的推进，导致流水线出现积压。这会使得后面的阶段饥饿，并在紧凑的循环里不断检查它们的输入队列。结果是，工作线程把 CPU 时间浪费在做无用功上；它们不停地抛出并捕获 \texttt{IndexError} 异常。
+
+但这只是这个实现所存在问题的开始。你还需要避免另外三个问题。首先，要确定所有输入工作都已完成，需要对 \texttt{done\_queue} 再做一次忙等待（busy wait）。其次，在 \texttt{Worker} 中，\texttt{run} 方法会在它的忙循环（busy loop）中永远执行下去。没有任何显而易见的方法能够向工作线程发出退出的信号。
+
+第三，也是最糟糕的一点，流水线中的积压可能导致程序任意崩溃。如果第一阶段进展飞快，而第二阶段进展缓慢，那么连接第一阶段与第二阶段的队列就会持续增长。第二阶段将跟不上节奏。只要给予足够的时间和输入数据，程序最终会耗尽内存并终止。
+
+这里的教训并不是说流水线不好，而是说要自己动手构建一个良好的生产者—消费者队列是很困难的。那为什么还要尝试呢？
+
+\subsection{\texttt{Queue} 来救场}
+
+内置（built-in）模块 \texttt{queue} 中的 \texttt{Queue} 类，提供了解决上述所有问题所需的功能。
+
+\texttt{Queue} 通过让 \texttt{get} 方法阻塞（block）调用线程，直到有数据可用，从而消除了对新条目的忙等待（busy waiting）。例如，下面我启动一个线程，它在一个队列上等待某些输入数据：
+
+\begin{codebox}[python]
+from queue import Queue
+my_queue = Queue()
+def consumer():
+    print("Consumer waiting")
+    my_queue.get()  # 在下方 put() 之后运行
+    print("Consumer done")
+thread = Thread(target=consumer)
+thread.start()
+\end{codebox}
+
+尽管消费者线程先运行，但它要等到 \texttt{put} 方法向 \texttt{Queue} 实例添加了一个条目、并且 \texttt{get} 方法有了可返回的东西之后，才会结束：
+
+\begin{codebox}[python]
+print("Producer putting")
+my_queue.put(object())  # 在上方 get() 之前运行
+print("Producer done")
+thread.join()
+>>>
+Consumer waiting
+Producer putting
+Producer done
+Consumer done
+\end{codebox}
+
+为了解决流水线积压问题并避免内存耗尽错误，\texttt{Queue} 类允许你指定两个阶段之间所允许的最大待处理工作量。这个缓冲区（buffer）大小会在队列已经满时，导致对 \texttt{put} 的调用被阻塞（有时这种行为被称为背压（back pressure））。例如，下面我定义一个线程，它在消费一个队列之前先等待一会儿：
+
+\begin{codebox}[python]
+my_queue = Queue(1)  # 缓冲区大小为 1
+def consumer():
+    time.sleep(0.1)  # 等待
+    my_queue.get()   # 第二次运行
+    print("Consumer got 1")
+    my_queue.get()   # 第四次运行
+    print("Consumer got 2")
+    print("Consumer done")
+thread = Thread(target=consumer)
+thread.start()
+\end{codebox}
+
+这个等待应当能让生产者线程在消费者线程调用 \texttt{get} 之前，为两个对象都调用队列的 \texttt{put} 方法。但队列的大小是 1。这意味着，向队列中添加条目的生产者，必须等消费者线程至少调用一次 \texttt{get} 之后，第二次对 \texttt{put} 的调用才会停止阻塞，并真正把第二个条目加入队列：
+
+\begin{codebox}[python]
+my_queue.put(object())  # 第一次运行
+print("Producer put 1")
+my_queue.put(object())  # 第三次运行
+print("Producer put 2")
+print("Producer done")
+thread.join()
+>>>
+Producer put 1
+Consumer got 1
+Producer put 2
+Producer done
+Consumer got 2
+Consumer done
+\end{codebox}
+
+\texttt{Queue} 类还能借助 \texttt{task\_done} 方法来跟踪工作进度。这让你能够等待某个阶段的输入队列排空（使用 \texttt{join} 方法），并免去了轮询流水线最后一个阶段的需要（就像上面小节中的 \texttt{done\_queue} 那样）。例如，下面我定义一个消费者线程，它在处理完一个条目后调用 \texttt{task\_done}：
+
+\begin{codebox}[python]
+in_queue = Queue()
+def consumer():
+    print("Consumer waiting")
+    work = in_queue.get()      # 第二次运行
+    print("Consumer working")
+    # 正在处理工作
+    ...
+    print("Consumer done")
+    in_queue.task_done()       # 第三次运行
+thread = Thread(target=consumer)
+thread.start()
+\end{codebox}
+
+现在，生产者代码不必在消费者线程上调用 \texttt{join}，也不必轮询。生产者只需在 \texttt{Queue} 实例上调用 \texttt{join}，就能等待 \texttt{in\_queue} 完成。即便队列已经空了，\texttt{in\_queue} 也要等到曾经入队（enqueue）的每个条目都调用过 \texttt{task\_done} 之后，才能被 join：
+
+\begin{codebox}[python]
+print("Producer putting")
+in_queue.put(object())     # 第一次运行
+print("Producer waiting")
+in_queue.join()            # 第四次运行
+print("Producer done")
+thread.join()
+>>>
+Consumer waiting
+Producer putting
+Producer waiting
+Consumer working
+Consumer done
+Producer done
+\end{codebox}
+
+\texttt{Queue} 类还允许通过调用 \texttt{shutdown} 方法（这是 Python 3.13 版本新增的特性）来轻松终止工作线程。在收到关闭（shutdown）信号后，对该队列的任何 \texttt{put} 调用都会抛出一个异常，但队列仍允许通过 \texttt{get} 调用来排空队列并完成待处理的工作。一旦队列彻底清空，工作线程中的 \texttt{get} 就会抛出一个 \texttt{ShutDown} 异常，从而给它清理并退出的机会（背景知识参见 Item 80（"充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的每个代码块"））。例如，下面我展示了一个线程在调用 \texttt{shutdown} 之后如何继续处理工作：
+
+\begin{codebox}[python]
+from queue import ShutDown
+my_queue2 = Queue()
+def consumer():
+    while True:
+        try:
+            item = my_queue2.get()
+        except ShutDown:
+            print("Terminating!")
+            return
+        else:
+            print("Got item", item)
+            my_queue2.task_done()
+thread = Thread(target=consumer)
+my_queue2.put(1)
+my_queue2.put(2)
+my_queue2.put(3)
+my_queue2.shutdown()
+thread.start()
+my_queue2.join()
+thread.join()
+print("Done")
+>>>
+Got item 1
+Got item 2
+Got item 3
+Terminating!
+Done
+\end{codebox}
+
+我可以把上述所有这些行为整合到一个新的工作线程类中：它每次处理一个输入条目，把结果放到一个输出队列中，将输入条目标记为已完成，并在 \texttt{ShutDown} 异常被抛出时终止：
+
+\begin{codebox}[python]
+class StoppableWorker(Thread):
+    def __init__(self, func, in_queue, out_queue):
+        super().__init__()
+        self.func = func
+        self.in_queue = in_queue
+        self.out_queue = out_queue
+    def run(self):
+        while True:
+            try:
+                item = self.in_queue.get()
+            except ShutDown:
+                return
+            else:
+                result = self.func(item)
+                self.out_queue.put(result)
+                self.in_queue.task_done()
+\end{codebox}
+
+现在我可以使用这个新的工作线程类，创建一组流水线线程和队列；其中 \texttt{resize} 和 \texttt{upload} 阶段指定了最大条目数，以防止程序耗尽内存：
+
+\begin{codebox}[python]
+download_queue = Queue()
+resize_queue = Queue(100)
+upload_queue = Queue(100)
+done_queue = Queue()
+threads = [
+    StoppableWorker(download, download_queue, resize_queue),
+    StoppableWorker(resize, resize_queue, upload_queue),
+    StoppableWorker(upload, upload_queue, done_queue),
+]
+for thread in threads:
+    thread.start()
+\end{codebox}
+
+要开始处理，我把所有输入工作注入到流水线的开端：
+
+\begin{codebox}[python]
+for _ in range(1000):
+    download_queue.put(object())
+\end{codebox}
+
+然后我等待每个阶段的工作完成。我格外小心：只有在某个阶段的所有工作都已经加入对应队列之后，才对该阶段的队列调用 \texttt{shutdown}。我使用 \texttt{join} 方法，确保在向下一个阶段发送终止信号之前，先等待队列中的所有工作都已完成：
+
+\begin{codebox}[python]
+download_queue.shutdown()
+download_queue.join()
+resize_queue.shutdown()
+resize_queue.join()
+upload_queue.shutdown()
+upload_queue.join()
+\end{codebox}
+
+一旦前面的阶段都已完成，我就向最后一个队列发送关闭信号，在主线程中接收每一个输出条目，并等待工作线程终止：
+
+\begin{codebox}[python]
+done_queue.shutdown()
+counter = 0
+while True:
+    try:
+        item = done_queue.get()
+    except ShutDown:
+        break
+    else:
+        # 处理该条目
+        ...
+        done_queue.task_done()
+        counter += 1
+done_queue.join()
+for thread in threads:
+    thread.join()
+print(counter, "items finished")
+>>>
+1000 items finished
+\end{codebox}
+
+这种方法可以扩展为每个阶段使用多个工作线程，从而显著提升此类程序的 I/O 并行（parallelism）能力。为此，我首先定义一些辅助函数，用于启动工作线程的多个副本并排空最终的队列：
+
+\begin{codebox}[python]
+def start_threads(count, *args):
+    threads = [StoppableWorker(*args) for _ in range(count)]
+    for thread in threads:
+        thread.start()
+    return threads
+def drain_queue(input_queue):
+    input_queue.shutdown()
+    counter = 0
+    while True:
+        try:
+            item = input_queue.get()
+        except ShutDown:
+            break
+        else:
+            input_queue.task_done()
+            counter += 1
+    input_queue.join()
+    return counter
+\end{codebox}
+
+然后我像之前一样把各个队列连接起来，并启动工作线程：
+
+\begin{codebox}[python]
+download_queue = Queue()
+resize_queue = Queue(100)
+upload_queue = Queue(100)
+done_queue = Queue()
+threads = (
+    start_threads(3, download, download_queue, resize_queue)
+    + start_threads(4, resize, resize_queue, upload_queue)
+    + start_threads(5, upload, upload_queue, done_queue)
+)
+\end{codebox}
+
+沿用上面示例中同样的 \texttt{put}、\texttt{shutdown}、\texttt{get} 和 \texttt{join} 调用顺序，我就能驱动工作流过整条流水线——只不过这一次每个中间阶段都使用了多个工作线程：
+
+\begin{codebox}[python]
+for _ in range(2000):
+    download_queue.put(object())
+download_queue.shutdown()
+download_queue.join()
+resize_queue.shutdown()
+resize_queue.join()
+upload_queue.shutdown()
+upload_queue.join()
+counter = drain_queue(done_queue)
+for thread in threads:
+    thread.join()
+print(counter, "items finished")
+>>>
+2000 items finished
+\end{codebox}
+
+尽管 \texttt{Queue} 在线性（linear）流水线中表现良好，但在不同的情况下，你还应考虑使用其他工具（例如参见 Item 75（"借助协程（coroutine）实现高度并发的 I/O"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 流水线（pipeline）让你能够组织一系列工作——尤其是 I/O 密集型（I/O-bound）程序——使它们借助多个 Python 线程并发运行。
+\item 要意识到构建并发流水线时会遇到的诸多问题：忙等待（busy waiting）、通知工作线程停止、判断工作何时完成，以及内存暴涨（memory explosion）。
+\item \texttt{Queue} 类具备构建健壮（robust）流水线所需的一切设施：阻塞（blocking）操作、缓冲区大小、join，以及 shutdown。
+\end{itemize}
+
+\section{Item 71: 学会识别何时需要并发}
+
+不可避免地，随着程序规模（scope）的增长，其复杂度也会随之上升。以兼顾清晰性、可测试性和高效性的方式来处理不断扩张的需求，是编程中最困难的部分之一。或许最难应对的一种变更，就是从一个单线程（single-threaded）程序，转变为一个需要多条并发（concurrency）执行线的程序。
+
+让我用一个例子来演示你可能会怎样遇到这个问题。假设我想实现康威生命游戏（Conway's Game of Life），它是有限状态自动机（finite state automata）的一个经典示例。游戏的规则很简单：有一个任意大小的二维网格（grid），网格中的每个单元格（cell）要么存活，要么为空：
+
+\begin{codebox}[python]
+ALIVE = "*"
+EMPTY = "-"
+\end{codebox}
+
+游戏每次按一个时钟周期（tick）向前推进。每个 tick，每个单元格都会统计它周围八个单元格中有多少个仍然存活。根据其邻居数量，一个单元格会决定是继续存活、死亡，还是重生。（具体的规则我下面还会说明。）下面是一个 5×5 的生命游戏网格，经历了四代演化、时间向右推进的示例：
+
+\begin{codebox}[python]
+  0   |   1   |   2   |   3   |   4
+----- | ----- | ----- | ----- | -----
+-*--- | --*-- | --**- | --*-- | -----
+--**- | --**- | -*--- | -*--- | -**--
+---*- | --**- | --**- | --*-- | -----
+----- | ----- | ----- | ----- | -----
+\end{codebox}
+
+我可以用一个简单的容器类来表示每个单元格的状态。这个类必须有允许我获取和设置任意坐标值的方法。超出边界的坐标应当环绕（wrap around），让网格表现得像一个无限循环的空间：
+
+\begin{codebox}[python]
+class Grid:
+    def __init__(self, height, width):
+        self.height = height
+        self.width = width
+        self.rows = []
+        for _ in range(self.height):
+            self.rows.append([EMPTY] * self.width)
+    def get(self, y, x):
+        return self.rows[y % self.height][x % self.width]
+    def set(self, y, x, state):
+        self.rows[y % self.height][x % self.width] = state
+    def __str__(self):
+        ...
+\end{codebox}
+
+为了看看这个类如何运作，我可以创建一个 \texttt{Grid} 实例，并将其初始状态设为一个称为滑翔机（glider）的经典图形：
+
+\begin{codebox}[python]
+grid = Grid(5, 9)
+grid.set(0, 3, ALIVE)
+grid.set(1, 4, ALIVE)
+grid.set(2, 2, ALIVE)
+grid.set(2, 3, ALIVE)
+grid.set(2, 4, ALIVE)
+print(grid)
+>>>
+---*-----
+----*----
+--***----
+---------
+---------
+\end{codebox}
+
+现在我需要一种方法来检索相邻单元格的状态。我可以用一个辅助函数来做到这一点，该函数会向网格查询其周围环境的信息，并返回存活邻居的数量。我没有传入整个 \texttt{Grid} 实例，而是为 \texttt{get\_cell} 参数使用一个简单的函数，以此降低耦合（coupling）（关于这种做法的更多内容，请参阅 Item 48「用函数而非类来满足简单接口」）：
+
+\begin{codebox}[python]
+def count_neighbors(y, x, get_cell):
+    n_ = get_cell(y - 1, x + 0)  # 北
+    ne = get_cell(y - 1, x + 1)  # 东北
+    e_ = get_cell(y + 0, x + 1)  # 东
+    se = get_cell(y + 1, x + 1)  # 东南
+    s_ = get_cell(y + 1, x + 0)  # 南
+    sw = get_cell(y + 1, x - 1)  # 西南
+    w_ = get_cell(y + 0, x - 1)  # 西
+    nw = get_cell(y - 1, x - 1)  # 西北
+    neighbor_states = [n_, ne, e_, se, s_, sw, w_, nw]
+    count = 0
+    for state in neighbor_states:
+        if state == ALIVE:
+            count += 1
+    return count
+\end{codebox}
+
+现在，我根据游戏的三条规则来定义康威生命游戏的简单逻辑：如果一个单元格的邻居少于两个，它就死亡；如果邻居多于三个，它也会死亡；如果一个空单元格恰好有三个邻居，它就变为存活：
+
+\begin{codebox}[python]
+def game_logic(state, neighbors):
+    if state == ALIVE:
+        if neighbors < 2:
+            return EMPTY     # 死亡：邻居太少
+        elif neighbors > 3:
+            return EMPTY     # 死亡：邻居太多
+    else:
+        if neighbors == 3:
+            return ALIVE     # 重生
+    return state
+\end{codebox}
+
+我可以在另一个负责转换单元格状态的函数中，把 \texttt{count\_neighbors} 和 \texttt{game\_logic} 连接起来。每一代都会调用这个函数，以判断某个单元格的当前状态、检查它周围的邻居单元格、确定它下一个应有的状态，并相应地更新结果网格。同样地，我没有传入 \texttt{Grid} 实例，而是为 \texttt{set\_cell} 使用了函数接口，使这段代码更加解耦：
+
+\begin{codebox}[python]
+def step_cell(y, x, get_cell, set_cell):
+    state = get_cell(y, x)
+    neighbors = count_neighbors(y, x, get_cell)
+    next_state = game_logic(state, neighbors)
+    set_cell(y, x, next_state)
+\end{codebox}
+
+最后，我可以定义一个函数，让整个细胞网格向前推进一步，然后返回一个包含下一代状态的新网格。这里的重要细节是：我需要所有相关函数都在上一代的 \texttt{Grid} 实例上调用 \texttt{get\_cell} 方法，并在下一代的 \texttt{Grid} 实例上调用 \texttt{set} 方法。这正是我确保所有单元格同步（lockstep）推进的方式，而这是该游戏运作机制中至关重要的一部分。之所以能轻松做到这一点，是因为我为 \texttt{get\_cell} 和 \texttt{set\_cell} 使用了函数接口，而非传入 \texttt{Grid} 实例：
+
+\begin{codebox}[python]
+def simulate(grid):
+    next_grid = Grid(grid.height, grid.width)
+    for y in range(grid.height):
+        for x in range(grid.width):
+            step_cell(y, x, grid.get, next_grid.set)
+    return next_grid
+\end{codebox}
+
+现在我可以每次让网格向前推进一代了。你可以看到，基于 \texttt{game\_logic} 函数中的简单规则，滑翔机是如何在网格上向右下方移动的：
+
+\begin{codebox}[python]
+class ColumnPrinter:
+    ...
+columns = ColumnPrinter()
+for i in range(5):
+    columns.append(str(grid))
+    grid = simulate(grid)
+print(columns)
+>>>
+    0     |     1     |     2     |     3     |     4
+---*----- | --------- | --------- | --------- | ---------
+----*---- | --*-*---- | ----*---- | ---*----- | ----*----
+--***---- | ---**---- | --*-*---- | ----**--- | -----*---
+--------- | ---*----- | ---**---- | ---**---- | ---***---
+--------- | --------- | --------- | --------- | ---------
+\end{codebox}
+
+对于一个能在单台机器上以单线程运行的程序来说，这种做法效果很好。但假设程序的需求发生了变化——正如我前面提到的——现在我需要在 \texttt{game\_logic} 函数内部做一些 I/O（例如使用网络套接字（network socket））。举例来说，如果我正试图构建一款大型多人在线游戏，而状态转移由网格状态与通过 Internet 和其他玩家通信共同决定，那么就可能必须这样做。
+
+我该如何扩展这个实现以支持这样的功能？最简单的做法就是直接在 \texttt{game\_logic} 函数中加入阻塞式 I/O：
+
+\begin{codebox}[python]
+def game_logic(state, neighbors):
+    ...
+    # 在这里做一些阻塞式输入/输出：
+    data = my_socket.recv(100)
+    ...
+\end{codebox}
+
+这种做法的问题在于，它会拖慢整个程序。如果所需 I/O 的延迟是 100 毫秒（这对于 Internet 上跨大洲的往返延迟来说已经相当不错了），而网格中有 45 个单元格，那么每一代至少要花 4.5 秒来求值，因为每个单元格都是在 \texttt{simulate} 函数中串行（serially）处理的。这太慢了，会让游戏根本没法玩。而且它的可扩展性也很差：如果我之后想把网格扩展到 10,000 个单元格，那么每一代的求值就需要 15 分钟以上。
+
+解决办法是并行（in parallel）执行 I/O，这样无论网格有多大，每一代都只需大约 100 毫秒。为每个工作单元（在这里就是一个单元格）派生出一条并发执行线的过程，称为扇出（fan-out）。在协调式流程（在这里就是一代）进入下一个阶段之前，等待所有这些并发工作单元全部完成的过程，称为扇入（fan-in）。
+
+Python 提供了许多内置工具来实现扇出和扇入，各有不同的取舍。你应该了解每种方式的优缺点（pros and cons），并根据具体情况为任务选择最合适的工具。有关细节，请参阅以下条目：Item 72「避免为按需扇出而新建 \texttt{Thread} 实例」、Item 73「理解用 \texttt{Queue} 实现并发需要重构」、Item 74「在线程对并发确属必要时考虑 \texttt{ThreadPoolExecutor}」，以及 Item 75「用协程（coroutine）实现高度并发的 I/O」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 随着程序的规模和复杂度增加，它往往开始需要支持多条并发执行线。
+\item 最常见的并发协调方式有扇出（fan-out，生成新的并发单元）和扇入（fan-in，等待已有的并发单元完成）。
+\item Python 有许多不同的方式来实现扇出和扇入。
+\end{itemize}
+
+\section{Item 72: 不要为按需扇出而新建 \texttt{Thread} 实例}
+
+在 Python 中做并行（parallel）I/O，线程（thread）是自然而然会首先想到的工具（参见 Item 68「用线程处理阻塞式 I/O；不要用于并行」）。然而，当你试图用它们向许多并发执行线扇出（fan out）时，它们有着显著的缺点。
+
+为了演示这一点，我会沿用前面的生命游戏示例（关于背景以及下面各个函数和类的实现，请参阅 Item 71「学会识别何时需要并发」）。我将使用线程来解决在 \texttt{game\_logic} 函数里做 I/O 所导致的延迟问题。首先，线程需要借助锁（lock）来协调，以确保数据结构内部的各种假设能够得到正确维护（详见 Item 69「用 \texttt{Lock} 防止线程中的数据竞争」）。我可以创建一个 \texttt{Grid} 类的子类，为其添加加锁行为，从而让一个实例能被多个线程同时使用：
+
+\begin{codebox}[python]
+from threading import Lock
+ALIVE = "*"
+EMPTY = "-"
+class Grid:
+    ...
+class LockingGrid(Grid):
+    def __init__(self, height, width):
+        super().__init__(height, width)
+        self.lock = Lock()
+    def __str__(self):
+        with self.lock:
+            return super().__str__()
+    def get(self, y, x):
+        with self.lock:
+            return super().get(y, x)
+    def set(self, y, x, state):
+        with self.lock:
+            return super().set(y, x, state)
+\end{codebox}
+
+然后，我可以重新实现 \texttt{simulate} 函数，为每次对 \texttt{step\_cell} 的调用都创建一个线程，从而实现扇出（fan out）。这些线程会并行运行，彼此无需等待对方的 I/O。接着，我可以等待所有线程都完成，再进入下一代，从而实现扇入（fan in）：
+
+\begin{codebox}[python]
+from threading import Thread
+def count_neighbors(y, x, get_cell):
+    ...
+def game_logic(state, neighbors):
+    ...
+    # 在这里做一些阻塞式输入/输出：
+    data = my_socket.recv(100)
+    ...
+def step_cell(y, x, get_cell, set_cell):
+    state = get_cell(y, x)
+    neighbors = count_neighbors(y, x, get_cell)
+    next_state = game_logic(state, neighbors)
+    set_cell(y, x, next_state)
+def simulate_threaded(grid):
+    next_grid = LockingGrid(grid.height, grid.width)
+    threads = []
+    for y in range(grid.height):
+        for x in range(grid.width):
+            args = (y, x, grid.get, next_grid.set)
+            thread = Thread(target=step_cell, args=args)
+            thread.start()  # 扇出
+            threads.append(thread)
+    for thread in threads:
+        thread.join()  # 扇入
+    return next_grid
+\end{codebox}
+
+我可以用与之前相同的 \texttt{step\_cell} 实现和相同的驱动代码来运行这段代码，只需改动两行，改用 \texttt{LockingGrid} 和 \texttt{simulate\_threaded} 实现：
+
+\begin{codebox}[python]
+class ColumnPrinter:
+    ...
+grid = LockingGrid(5, 9)  # 已改动
+grid.set(0, 3, ALIVE)
+grid.set(1, 4, ALIVE)
+grid.set(2, 2, ALIVE)
+grid.set(2, 3, ALIVE)
+grid.set(2, 4, ALIVE)
+columns = ColumnPrinter()
+for i in range(5):
+    columns.append(str(grid))
+    grid = simulate_threaded(grid)  # 已改动
+print(columns)
+>>>
+    0     |     1     |     2     |     3     |     4
+---*----- | --------- | --------- | --------- | ---------
+----*---- | --*-*---- | ----*---- | ---*----- | ----*----
+--***---- | ---**---- | --*-*---- | ----**--- | -----*---
+--------- | ---*----- | ---**---- | ---**---- | ---***---
+--------- | --------- | --------- | --------- | ---------
+\end{codebox}
+
+这段代码如预期般工作，I/O 现在在各个线程之间实现了并行。然而，这段代码有三个大问题：
+
+\begin{itemize}
+\item \texttt{Thread} 实例需要特殊的工具（即 \texttt{Lock} 对象（object））才能安全地相互协调。与使用线程的代码相比，之前那种过程式（procedural）、单线程的代码更易于推理。这种复杂性使得线程化代码随着时间推移更难扩展和维护。
+\item 线程需要大量内存——每个执行中的线程大约 8 MB。在许多计算机上，本例中所需的 45 个线程占用的内存并不算什么。但如果游戏网格必须增长到 10,000 个单元格，我就得创建那么多线程，所需内存高达 80 GB，程序根本装不进我的机器。虽然某些操作系统会使些花招，把线程的完整内存分配推迟到其执行栈（execution stack）足够深时才进行，但为每个并发活动各跑一个线程，仍有无法可靠工作的风险。
+\item 启动线程的代价不菲，而线程在运行时，由于彼此之间上下文切换（context switching）的开销，还会带来负面的性能影响。在上面的代码中，每一代游戏都会启动并停止所有线程，其开销之大，会把延迟推高到超出预期的 100 毫秒 I/O 时间之上。
+\end{itemize}
+
+如果出了什么问题，这段代码也会非常难以调试。例如，想象一下 \texttt{game\_logic} 函数抛出了一个异常（exception）——考虑到 I/O 普遍不稳定的特性，这是极有可能的：
+
+\begin{codebox}[python]
+def game_logic(state, neighbors):
+    ...
+    raise OSError("Problem with I/O")
+    ...
+\end{codebox}
+
+我可以运行一个指向该函数的 \texttt{Thread} 实例，并把程序的 \texttt{sys.stderr} 输出重定向到一个内存中的 \texttt{StringIO} 缓冲区，以此测试这会发生什么：
+
+\begin{codebox}[python]
+import contextlib
+import io
+fake_stderr = io.StringIO()
+with contextlib.redirect_stderr(fake_stderr):
+    thread = Thread(target=game_logic, args=(ALIVE, 3))
+    thread.start()
+    thread.join()
+print(fake_stderr.getvalue())
+>>>
+Exception in thread Thread-226 (game_logic):
+Traceback (most recent call last):
+  File "threading.py", line 1039, in _bootstrap_inner
+    self.run()
+    ~~~~~~~~^^
+  File "threading.py", line 990, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "example.py", line 205, in game_logic
+    raise OSError('Problem with I/O')
+OSError: Problem with I/O
+\end{codebox}
+
+我们预期会得到一个 \texttt{OSError} 异常，但不知为何，创建该线程并对其进行 \texttt{join} 的那段代码却毫发无损。这怎么可能？原因在于，\texttt{Thread} 类会自行捕获 \texttt{target} 函数抛出的任何异常，然后把它们的回溯（traceback）写入 \texttt{sys.stderr}。这些异常永远不会重新抛给最初启动该线程的调用者。
+
+鉴于上述所有问题，显然，如果你需要不断创建并结束新的并发函数，线程并非解决之道。
+
+Python 提供了其他更契合的方案（参见 Item 73「理解用 \texttt{Queue} 实现并发需要重构」、Item 74「在线程对并发确属必要时考虑 \texttt{ThreadPoolExecutor}」，以及 Item 75「用协程（coroutine）实现高度并发的 I/O」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 线程有许多缺点：如果需要大量线程，它们的启动和运行都很昂贵，每个线程都需要可观的内存量，而且它们需要像 \texttt{Lock} 实例这样的特殊工具来协调。
+\item \texttt{Thread} 没有内置的方式来把异常重新抛回启动它的代码，或抛回正在等待它完成的另一个线程，这极大地妨碍了调试。
+\end{itemize}
+
+\section{Item 73: 理解使用队列（Queue）实现并发需要重构}
+
+在上一节（见 Item 72（"避免为按需扇出创建新的 \texttt{Thread} 实例"））中，我讨论了使用 \texttt{Thread}（线程）来解决此前 Game of Life（生命游戏）示例中并行（parallel）I/O 问题的种种弊端（相关背景，以及下文各种函数与类的实现，请见 Item 71（"了解如何判断何时需要并发（concurrency）"））。
+
+接下来要尝试的方案，是使用内置（built-in）\texttt{queue} 模块中的 \texttt{Queue} 类来实现一个基于线程的流水线（pipeline）（相关背景见 Item 70（"使用 \texttt{Queue} 协调线程之间的工作"）；下文示例代码依赖于那一节中 \texttt{StoppableWorker} 的实现）。
+
+总体思路如下：与其为 Game of Life 每一代的每一个细胞都创建一个线程，不如预先创建固定数量的工作线程（worker thread），让它们按需执行并行化 I/O。这样既能把资源使用量控制在合理范围，又能消除频繁启动新线程带来的开销。
+
+为此，我需要两个 \texttt{Queue} 实例，用于在运行 \texttt{game\_logic} 函数的工作线程之间收发通信：
+
+\begin{codebox}[python]
+from queue import Queue
+in_queue = Queue()
+out_queue = Queue()
+\end{codebox}
+
+我可以启动多个线程，它们会从 \texttt{in\_queue} 取出条目，通过调用 \texttt{game\_logic} 进行处理，再把结果放入 \texttt{out\_queue}。这些线程会并发运行，从而实现并行 I/O，并降低每一代的延迟：
+
+\begin{codebox}[python]
+from threading import Thread
+class StoppableWorker(Thread):
+    ...
+def game_logic(state, neighbors):
+    ...
+    # 在此处执行某些阻塞式输入/输出：
+    data = my_socket.recv(100)
+    ...
+def game_logic_thread(item):
+    y, x, state, neighbors = item
+    try:
+        next_state = game_logic(state, neighbors)
+    except Exception as e:
+        next_state = e
+    return (y, x, next_state)
+# Start the threads upfront
+threads = []
+for _ in range(5):
+    thread = StoppableWorker(
+        game_logic_thread, in_queue, out_queue)
+    thread.start()
+    threads.append(thread)
+\end{codebox}
+
+现在我可以把 \texttt{simulate} 函数重写为与这些队列交互，以请求状态转换决策并接收相应的响应。向 \texttt{in\_queue} 添加条目就是扇出（fan-out），而从 \texttt{out\_queue} 持续取出条目直到为空就是扇入（fan-in）：
+
+\begin{codebox}[python]
+ALIVE = "*"
+EMPTY = "-"
+class SimulationError(Exception):
+    pass
+class Grid:
+    ...
+def count_neighbors(y, x, get_cell):
+    ...
+def simulate_pipeline(grid, in_queue, out_queue):
+    for y in range(grid.height):
+        for x in range(grid.width):
+            state = grid.get(y, x)
+            neighbors = count_neighbors(y, x, grid.get)
+            in_queue.put((y, x, state, neighbors))  # 扇出
+    in_queue.join()
+    item_count = out_queue.qsize()
+    next_grid = Grid(grid.height, grid.width)
+    for _ in range(item_count):
+        item = out_queue.get()                      # 扇入
+        y, x, next_state = item
+        if isinstance(next_state, Exception):
+            raise SimulationError(y, x) from next_state
+        next_grid.set(y, x, next_state)
+    return next_grid
+\end{codebox}
+
+对 \texttt{Grid.get} 和 \texttt{Grid.set} 的调用都发生在这个新写的 \texttt{simulate\_pipeline} 函数内部，这意味着我可以使用 \texttt{Grid} 的单线程实现，而不必使用需要 \texttt{Lock} 实例来做同步的实现（相关背景见 Item 69（"使用 \texttt{Lock} 防止线程中的数据竞争"））。
+
+这段代码也比上一节使用的 \texttt{Thread} 方案更容易调试。如果在 \texttt{game\_logic} 函数执行 I/O 时抛出异常，它会被外层的 \texttt{game\_logic\_thread} 函数捕获，传播到 \texttt{out\_queue}，然后在主线程中重新抛出：
+
+\begin{codebox}[python]
+def game_logic(state, neighbors):
+    ...
+    raise OSError("Problem with I/O in game_logic")
+    ...
+simulate_pipeline(Grid(1, 1), in_queue, out_queue)
+>>>
+Traceback ...
+OSError: Problem with I/O in game_logic
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+SimulationError: (0, 0)
+\end{codebox}
+
+我可以在一个循环中反复调用 \texttt{simulate\_pipeline}，从而驱动这条多线程流水线进行多代演化：
+
+\begin{codebox}[python]
+class ColumnPrinter:
+    ...
+grid = Grid(5, 9)
+grid.set(0, 3, ALIVE)
+grid.set(1, 4, ALIVE)
+grid.set(2, 2, ALIVE)
+grid.set(2, 3, ALIVE)
+grid.set(2, 4, ALIVE)
+columns = ColumnPrinter()
+for i in range(5):
+    columns.append(str(grid))
+    grid = simulate_pipeline(grid, in_queue, out_queue)
+print(columns)
+in_queue.shutdown()
+in_queue.join()
+for thread in threads:
+    thread.join()
+>>>
+    0     |     1     |     2     |     3     |     4
+---*----- | --------- | --------- | --------- | ---------
+----*---- | --*-*---- | ----*---- | ---*----- | ----*----
+--***---- | ---**---- | --*-*---- | ----**--- | -----*---
+--------- | ---*----- | ---**---- | ---**---- | ---***---
+--------- | --------- | --------- | --------- | ---------
+\end{codebox}
+
+结果与之前相同。虽然我解决了单独使用线程时出现的的内存爆炸问题、启动开销以及调试难题，但许多问题依然存在：
+
+\begin{itemize}
+\item \texttt{simulate\_pipeline} 函数比上一节的 \texttt{simulate\_threaded} 方法更难理解。
+\item 需要额外的辅助功能（例如 \texttt{StoppableWorker}）来让代码更易读，代价是复杂度增加。
+\item 我必须根据对工作负载的预期，预先指定潜在的并行度——即运行 \texttt{game\_logic\_thread} 的线程数量——而不能让系统按需自动扩展并行度。
+\item 为了支持调试，我必须手动在工作线程中捕获异常，通过队列传递它们，然后在主线程中重新抛出。
+\end{itemize}
+
+然而，如果需求再次发生变化，这段代码最大的问题就会暴露出来。假设日后我除了需要在 \texttt{game\_logic} 内部做 I/O 之外，还需要在 \texttt{count\_neighbors} 函数内部做 I/O：
+
+\begin{codebox}[python]
+def count_neighbors(y, x, get_cell):
+    ...
+    # 在此处执行某些阻塞式输入/输出：
+    data = my_socket.recv(100)
+    ...
+\end{codebox}
+
+为了让这部分也能并行化，我需要给流水线增加一个阶段，在一个线程中运行 \texttt{count\_neighbors}。我必须确保异常能在工作线程与主线程之间正确传播。而且我需要为 \texttt{Grid} 类使用锁（lock），以保证工作线程之间的同步安全（相关背景以及 \texttt{LockingGrid} 的实现，请见 Item 72（"避免为按需扇出创建新的 \texttt{Thread} 实例"））：
+
+\begin{codebox}[python]
+def count_neighbors_thread(item):
+    y, x, state, get_cell = item
+    try:
+        neighbors = count_neighbors(y, x, get_cell)
+    except Exception as e:
+        neighbors = e
+    return (y, x, state, neighbors)
+def game_logic_thread(item):
+    y, x, state, neighbors = item
+    if isinstance(neighbors, Exception):
+        next_state = neighbors
+    else:
+        try:
+            next_state = game_logic(state, neighbors)
+        except Exception as e:
+            next_state = e
+    return (y, x, next_state)
+class LockingGrid(Grid):
+    ...
+\end{codebox}
+
+我必须再创建一组 \texttt{Queue} 实例，供 \texttt{count\_neighbors\_thread} 工作线程以及相应的 \texttt{Thread} 实例使用：
+
+\begin{codebox}[python]
+in_queue = Queue()
+logic_queue = Queue()
+out_queue = Queue()
+threads = []
+for _ in range(5):
+    thread = StoppableWorker(
+        count_neighbors_thread, in_queue, logic_queue
+    )
+    thread.start()
+    threads.append(thread)
+for _ in range(5):
+    thread = StoppableWorker(
+        game_logic_thread, logic_queue, out_queue
+    )
+    thread.start()
+    threads.append(thread)
+\end{codebox}
+
+最后，我需要更新 \texttt{simulate\_pipeline}，以协调流水线中的多个阶段，并确保工作能够正确地扇出再扇回：
+
+\begin{codebox}[python]
+def simulate_phased_pipeline(grid, in_queue, logic_queue,
+out_queue):
+    for y in range(grid.height):
+        for x in range(grid.width):
+            state = grid.get(y, x)
+            item = (y, x, state, grid.get)
+            in_queue.put(item)            # 扇出
+    in_queue.join()
+    logic_queue.join()                    # 流水线排序
+    item_count = out_queue.qsize()
+    next_grid = LockingGrid(grid.height, grid.width)
+    for _ in range(item_count):
+        y, x, next_state = out_queue.get()  # 扇入
+        if isinstance(next_state, Exception):
+            raise SimulationError(y, x) from next_state
+        next_grid.set(y, x, next_state)
+    return next_grid
+\end{codebox}
+
+有了这些更新后的实现，现在我就能端到端地运行这条多阶段流水线了：
+
+\begin{codebox}[python]
+grid = LockingGrid(5, 9)
+grid.set(0, 3, ALIVE)
+grid.set(1, 4, ALIVE)
+grid.set(2, 2, ALIVE)
+grid.set(2, 3, ALIVE)
+grid.set(2, 4, ALIVE)
+columns = ColumnPrinter()
+for i in range(5):
+    columns.append(str(grid))
+    grid = simulate_phased_pipeline(
+        grid, in_queue, logic_queue, out_queue
+    )
+print(columns)
+in_queue.shutdown()
+in_queue.join()
+logic_queue.shutdown()
+logic_queue.join()
+for thread in threads:
+    thread.join()
+>>>
+    0     |     1     |     2     |     3     |     4
+---*----- | --------- | --------- | --------- | ---------
+----*---- | --*-*---- | ----*---- | ---*----- | ----*----
+--***---- | ---**---- | --*-*---- | ----**--- | -----*---
+--------- | ---*----- | ---**---- | ---**---- | ---***---
+--------- | --------- | --------- | --------- | ---------
+\end{codebox}
+
+同样，它按预期工作，但这需要大量改动和样板代码（boilerplate）。关键在于，\texttt{Queue} 确实能够解决扇出与扇入问题，但复杂度非常高。尽管使用 \texttt{Queue} 比单独使用 \texttt{Thread} 实例要好，但它仍远不及 Python 提供的其他一些工具（见 Item 74（"当并发需要线程时，考虑使用 \texttt{ThreadPoolExecutor}"）以及 Item 75（"用协程（coroutine）实现高度并发的 I/O"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 使用固定数量工作线程配合 \texttt{Queue} 实例，可提升基于线程的扇出与扇入的可扩展性。
+\item 将现有代码重构为使用 \texttt{Queue} 需要大量工作，尤其是当流水线需要多个阶段时。
+\item 与 Python 其他更动态的内置特性和模块所提供的替代方案相比，使用固定数量工作线程配合 \texttt{Queue} 从根本上限制了程序能够利用的 I/O 并行总量。
+\end{itemize}
+
+\section{Item 74: 当需要用线程实现并发时考虑使用 ThreadPoolExecutor}
+
+Python 包含内置的 \texttt{concurrent.futures} 模块，它提供了 \texttt{ThreadPoolExecutor} 类。它结合了 \texttt{Thread}（见 Item 72「避免为按需扇出而新建 \texttt{Thread} 实例」）与 \texttt{Queue}（见 Item 73「理解用 \texttt{Queue} 实现并发需要重构」）两种方案的优点，用于解决生命游戏（Game of Life）示例中的并行 I/O 问题（相关背景以及下面各种函数和类的实现，请见 Item 71「知道如何识别何时需要并发」）：
+
+\begin{codebox}[python]
+ALIVE = "*"
+EMPTY = "-"
+class Grid:
+    ...
+class LockingGrid(Grid):
+    ...
+def count_neighbors(y, x, get_cell):
+    ...
+def game_logic(state, neighbors):
+    ...
+    # 在这里做一些阻塞式的输入/输出：
+    data = my_socket.recv(100)
+    ...
+def step_cell(y, x, get_cell, set_cell):
+    state = get_cell(y, x)
+    neighbors = count_neighbors(y, x, get_cell)
+    next_state = game_logic(state, neighbors)
+    set_cell(y, x, next_state)
+\end{codebox}
+
+与其为每个 \texttt{Grid} 方格新建一个 \texttt{Thread} 实例，我可以改用扇出（fan-out）方式：把一个函数提交给执行器（executor），它会在独立的线程中运行。随后，我可以等待所有任务的结果，从而实现扇入（fan-in）：
+
+\begin{codebox}[python]
+from concurrent.futures import ThreadPoolExecutor
+def simulate_pool(pool, grid):
+    next_grid = LockingGrid(grid.height, grid.width)
+    futures = []
+    for y in range(grid.height):
+        for x in range(grid.width):
+            args = (y, x, grid.get, next_grid.set)
+            future = pool.submit(step_cell, *args)  # 扇出
+            futures.append(future)
+    for future in futures:
+        future.result()                             # 扇入
+    return next_grid
+\end{codebox}
+
+执行器所使用的线程可以预先分配好，这意味着我不必在每次执行 \texttt{simulate\_pool} 时都付出线程启动的代价。我还可以用 \texttt{max\_workers} 参数指定线程池最多使用的线程数，从而避免朴素 \texttt{Thread} 方案在并行 I/O 问题上遇到的内存暴涨问题（即每个格子一个线程）：
+
+\begin{codebox}[python]
+class ColumnPrinter:
+    ...
+grid = LockingGrid(5, 9)
+grid.set(0, 3, ALIVE)
+grid.set(1, 4, ALIVE)
+grid.set(2, 2, ALIVE)
+grid.set(2, 3, ALIVE)
+grid.set(2, 4, ALIVE)
+columns = ColumnPrinter()
+with ThreadPoolExecutor(max_workers=10) as pool:
+    for i in range(5):
+        columns.append(str(grid))
+        grid = simulate_pool(pool, grid)
+print(columns)
+>>>
+    0     |     1     |     2     |     3     |     4
+---*----- | --------- | --------- | --------- | ---------
+----*---- | --*-*---- | ----*---- | ---*----- | ----*----
+--***---- | ---**---- | --*-*---- | ----**--- | -----*---
+--------- | ---*----- | ---**---- | ---**---- | ---***---
+--------- | --------- | --------- | --------- | ---------
+\end{codebox}
+
+\texttt{ThreadPoolExecutor} 类最棒的地方在于，当对 \texttt{submit} 方法返回的 \texttt{Future} 实例调用 \texttt{result} 方法时，它会自动把异常传播回调用方：
+
+\begin{codebox}[python]
+def game_logic(state, neighbors):
+    ...
+    raise OSError("Problem with I/O")
+    ...
+with ThreadPoolExecutor(max_workers=10) as pool:
+    task = pool.submit(game_logic, ALIVE, 3)
+    task.result()
+>>>
+Traceback ...
+OSError: Problem with I/O
+\end{codebox}
+
+如果我除了 \texttt{game\_logic} 之外还需要为 \texttt{count\_neighbors} 函数提供 I/O 并行，也无需对程序做任何修改，因为 \texttt{ThreadPoolExecutor} 已经作为 \texttt{step\_cell} 的一部分并发地运行这些函数了。如果有必要，甚至可以使用同一套接口实现 CPU 并行（见 Item 79「考虑用 concurrent.futures 实现真正的并行」）。
+
+然而，仍然存在一个大问题，那就是 \texttt{ThreadPoolExecutor} 所能提供的 I/O 并行能力有限。即便我把 \texttt{max\_workers} 参数设为 100，如果网格中有 1 万多个格子需要同时进行 I/O，这个方案依然无法扩展。在没有异步方案的情况下（例如阻塞式文件系统操作），\texttt{ThreadPoolExecutor} 是个不错的选择；但在很多场景下，还有更好的办法来最大化 I/O 并行（见 Item 75「用协程实现高度并发的 I/O」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{ThreadPoolExecutor} 让你只需少量重构就能实现简单的 I/O 并行。
+\item 你可以借助 \texttt{ThreadPoolExecutor}，避免每次需要扇出（fan-out）并发时都付出线程启动的代价。
+\item \texttt{ThreadPoolExecutor} 会在线程边界自动传播异常，从而让多线程代码更容易调试。
+\item 尽管 \texttt{ThreadPoolExecutor} 消除了直接使用线程可能带来的内存暴涨问题，但它要求预先指定 \texttt{max\_workers}，这也限制了 I/O 并行度。
+\end{itemize}
+
+\section{Item 75: 用协程实现高度并发的 I/O}
+
+前面的条目尝试用不同方式解决生命游戏（Game of Life）示例中的并行 I/O 问题，效果各不相同（相关背景以及下面各种函数和类的实现，请见 Item 71「知道如何识别何时需要并发」）。其他方法都无法应对成千上万个同时并发的函数（见 Item 72「避免为按需扇出而新建 \texttt{Thread} 实例」、Item 73「理解用 \texttt{Queue} 实现并发需要重构」，以及 Item 74「当需要用线程实现并发时考虑使用 \texttt{ThreadPoolExecutor}」）。
+
+Python 用协程（coroutine）来满足高度并发 I/O 的需求。协程让你可以在 Python 程序中拥有数量极多、看似在同时执行的函数。它们是用 \texttt{async} 和 \texttt{await} 关键字，再加上支撑生成器（generator）的那套基础设施实现的（见 Item 43「考虑用生成器替代返回列表」、Item 46「把迭代器作为参数传入生成器，而不是调用 \texttt{send} 方法」，以及 Item 47「用类来管理迭代状态转移，而不是用生成器的 \texttt{throw} 方法」）。
+
+启动一个协程的代价只是一次函数调用。一旦协程被激活，在它耗尽之前只会占用不到 1 KB 的内存。和线程一样，协程也是独立的函数，可以从环境中获取输入并产生输出。区别在于，协程会在每个 \texttt{await} 表达式处暂停，并在待决的可等待对象（awaitable）被解决后，恢复执行对应的 \texttt{async} 函数（类似于 \texttt{yield} 在生成器中的行为）。
+
+当许多独立的 \texttt{async} 函数被步调一致地推进时，它们看起来都在同时运行，模仿了 Python 线程的并发行为。然而，协程做到这一点时，却不需要线程所需的那些内存开销、启动与上下文切换代价，以及复杂的加锁与同步代码。驱动协程的神奇机制是事件循环（event loop），它能在恰当编写的函数之间快速交错执行，从而高效地完成高度并发的 I/O。
+
+我可以用协程来实现生命游戏。我的目标是在 \texttt{game\_logic} 函数内部允许发生 I/O，同时克服前面条目中 \texttt{Thread}、\texttt{Queue} 和 \texttt{ThreadPoolExecutor} 方案的问题。为此，我首先用 \texttt{async def} 而非 \texttt{def} 来定义 \texttt{game\_logic} 函数，以此表明它是一个协程。这样我就能在 I/O 处使用 \texttt{await} 语法，例如从套接字（socket）异步地 \texttt{read}：
+
+\begin{codebox}[python]
+ALIVE = "*"
+EMPTY = "-"
+class Grid:
+    ...
+def count_neighbors(y, x, get_cell):
+    ...
+async def game_logic(state, neighbors):
+    ...
+    # 在这里做一些输入/输出：
+    data = await my_socket.read(50)
+    ...
+\end{codebox}
+
+类似地，我可以通过在 \texttt{step\_cell} 的定义中加上 \texttt{async}，并对 \texttt{game\_logic} 函数的调用使用 \texttt{await}，把它也变成一个协程：
+
+\begin{codebox}[python]
+async def step_cell(y, x, get_cell, set_cell):
+    state = get_cell(y, x)
+    neighbors = count_neighbors(y, x, get_cell)
+    next_state = await game_logic(state, neighbors)
+    set_cell(y, x, next_state)
+\end{codebox}
+
+\texttt{simulate} 函数也需要变成一个协程：
+
+\begin{codebox}[python]
+import asyncio
+async def simulate(grid):
+    next_grid = Grid(grid.height, grid.width)
+    tasks = []
+    for y in range(grid.height):
+        for x in range(grid.width):
+             task = step_cell(
+    y, x, grid.get, next_grid.set)        # Fan-out
+            tasks.append(task)
+    await asyncio.gather(*tasks)                      # Fan-in
+    return next_grid
+\end{codebox}
+
+\texttt{simulate} 函数的协程版本需要一些解释：
+
+\begin{itemize}
+\item 调用 \texttt{step\_cell} 并不会立即运行该函数。相反，它会返回一个协程实例，可以在稍后配合 \texttt{await} 表达式使用。这类似于使用 \texttt{yield} 的生成器函数在被调用时返回的是一个生成器实例，而不是立即执行。像这样推迟执行，正是实现扇出（fan-out）的机制。
+\item 来自内置库 \texttt{asyncio} 的 \texttt{gather} 函数负责实现扇入（fan-in）。对 \texttt{gather} 调用 \texttt{await} 表达式会指示事件循环并发地运行各个 \texttt{step\_cell} 协程，并在所有协程都完成后恢复 \texttt{simulate} 协程的执行（另一种使用 \texttt{asyncio.TaskGroup} 的做法，见 Item 77「混用线程与协程以平稳过渡到 asyncio」）。
+\item 由于所有执行都发生在单个线程内，\texttt{Grid} 实例不需要任何锁。I/O 会作为 \texttt{asyncio} 所提供的事件循环的一部分而被并行化。
+\end{itemize}
+
+最后，我只需对原始示例做一行改动就能驱动这段代码。它依赖 \texttt{asyncio.run} 函数在事件循环中执行 \texttt{simulate} 协程，并完成它所依赖的 I/O：
+
+\begin{codebox}[python]
+class ColumnPrinter:
+    ...
+grid = Grid(5, 9)
+grid.set(0, 3, ALIVE)
+grid.set(1, 4, ALIVE)
+grid.set(2, 2, ALIVE)
+grid.set(2, 3, ALIVE)
+grid.set(2, 4, ALIVE)
+columns = ColumnPrinter()
+for i in range(5):
+    columns.append(str(grid))
+    grid = asyncio.run(simulate(grid))  # Run the event loop
+print(columns)
+>>>
+    0     |     1     |     2     |     3     |     4
+---*----- | --------- | --------- | --------- | ---------
+----*---- | --*-*---- | ----*---- | ---*----- | ----*----
+--***---- | ---**---- | --*-*---- | ----**--- | -----*---
+--------- | ---*----- | ---**---- | ---**---- | ---***---
+--------- | --------- | --------- | --------- | ---------
+\end{codebox}
+
+结果与之前相同。所有与线程相关的开销都被消除了。\texttt{Queue} 和 \texttt{ThreadPoolExecutor} 方案在异常处理上很有限——充其量只是跨线程边界重新抛出异常——而使用协程时，我甚至可以用交互式调试器逐行单步执行异常处理代码（见 Item 114「考虑用 \texttt{pdb} 进行交互式调试」）。
+
+之后，如果我的需求发生变化，还需要在 \texttt{count\_neighbors} 内部做 I/O，我也只需在现有函数和调用处加上 \texttt{async} 和 \texttt{await} 关键字就能轻松实现，而不必像使用 \texttt{Thread} 或 \texttt{Queue} 实例时那样把所有东西都重构一遍（另一个例子见 Item 76「知道如何把线程式 I/O 移植到 \texttt{asyncio}」）：
+
+\begin{codebox}[python]
+async def count_neighbors(y, x, get_cell):
+    ...
+async def step_cell(y, x, get_cell, set_cell):
+    state = get_cell(y, x)
+    neighbors = await count_neighbors(y, x, get_cell)
+    next_state = await game_logic(state, neighbors)
+    set_cell(y, x, next_state)
+grid = Grid(5, 9)
+grid.set(0, 3, ALIVE)
+grid.set(1, 4, ALIVE)
+grid.set(2, 2, ALIVE)
+grid.set(2, 3, ALIVE)
+grid.set(2, 4, ALIVE)
+columns = ColumnPrinter()
+for i in range(5):
+    columns.append(str(grid))
+    grid = asyncio.run(simulate(grid))
+print(columns)
+>>>
+    0     |     1     |     2     |     3     |     4
+---*----- | --------- | --------- | --------- | ---------
+----*---- | --*-*---- | ----*---- | ---*----- | ----*----
+--***---- | ---**---- | --*-*---- | ----**--- | -----*---
+--------- | ---*----- | ---**---- | ---**---- | ---***---
+--------- | --------- | --------- | --------- | ---------
+\end{codebox}
+
+协程的美妙之处在于，它把你的代码针对外部环境（即 I/O）发出的指令，与真正执行你意愿的实现（即事件循环）解耦开来。它让你专注于自己真正想做的事的逻辑，而不必浪费时间去琢磨如何并发地完成目标。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 用 \texttt{async} 关键字定义的函数称为协程。调用方可以通过 \texttt{await} 关键字获取所依赖的协程的结果。
+\item 协程提供了一种高效的方式，让你能看似同时地运行数以万计的函数。
+\item 协程可以使用扇出（fan-out）和扇入（fan-in）来并行化 I/O，同时还克服了在线程中做 I/O 所伴随的全部问题。
+\end{itemize}
+
+\section{Item 76: 掌握如何将基于线程的 I/O 移植到 asyncio}
+
+一旦你理解了协程（coroutine）的优势（参见 Item 75：用协程实现高并发 I/O），把现有代码库移植过来使用它们，似乎会令人望而生畏。所幸，Python 对异步执行（asynchronous execution）的支持已经深度集成进语言本身。这让把使用线程（thread）的阻塞式 I/O 代码迁移到协程（coroutine）和异步 I/O 变得轻而易举。
+
+举例来说，假设我有一个基于 TCP 的服务器，用于运行一个「猜数字」游戏。该服务器接收 \texttt{lower} 和 \texttt{upper} 两个参数，它们决定了要考虑的数字范围。然后，每当客户端请求时，服务器就返回该范围内的整数猜测值。最后，服务器会从客户端收集报告，说明每个数字距离客户端的秘密数字是更接近（warmer）了还是更远（colder）了。
+
+构建这类客户端/服务器系统最常见的方式，是使用阻塞式 I/O 和线程（thread）（参见 Item 68：用线程处理阻塞式 I/O，避免用于并行）。为此，我需要一个辅助类来管理消息的发送与接收。就我的需求而言，发送或接收的每一行都代表一条待处理的命令：
+
+\begin{codebox}[python]
+class EOFError(Exception):
+    pass
+class Connection:
+    def __init__(self, connection):
+        self.connection = connection
+        self.file = connection.makefile("rb")
+    def send(self, command):
+        line = command + "\n"
+        data = line.encode()
+        self.connection.send(data)
+    def receive(self):
+        line = self.file.readline()
+        if not line:
+            raise EOFError("Connection closed")
+        return line[:-1].decode()
+\end{codebox}
+
+服务器被实现为一个类，它一次处理一个连接，并维护游戏的会话状态：
+
+\begin{codebox}[python]
+import random
+WARMER = "Warmer"
+COLDER = "Colder"
+SAME = "Same"
+UNSURE = "Unsure"
+CORRECT = "Correct"
+class UnknownCommandError(Exception):
+    pass
+class ServerSession(Connection):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.clear_state()
+\end{codebox}
+
+它有一个主要方法，负责处理来自客户端的命令，并在需要时将它们分派给相应的方法。这里我使用 \texttt{match} 语句来解析半结构化数据（详见 Item 9：在流程控制中用 \texttt{match} 做解构，当 \texttt{if} 语句已足够时避免使用）：
+
+\begin{codebox}[python]
+    def loop(self):
+        while command := self.receive():
+            match command.split(" "):
+                case "PARAMS", lower, upper:
+                    self.set_params(lower, upper)
+                case ["NUMBER"]:
+                    self.send_number()
+                case "REPORT", decision:
+                    self.receive_report(decision)
+                case ["CLEAR"]:
+                    self.clear_state()
+                case _:
+                    raise UnknownCommandError(command)
+\end{codebox}
+
+第一条命令设定服务器所要猜测数字的下界和上界：
+
+\begin{codebox}[python]
+    def set_params(self, lower, upper):
+        self.clear_state()
+        self.lower = int(lower)
+        self.upper = int(upper)
+\end{codebox}
+
+第二条命令基于存储在 \texttt{ServerSession} 实例中的先前状态做出新的猜测。具体而言，这段代码确保服务器在每个参数赋值周期内，绝不会重复猜测同一个数字超过一次：
+
+\begin{codebox}[python]
+    def next_guess(self):
+        if self.secret is not None:
+            return self.secret
+        while True:
+            guess = random.randint(self.lower, self.upper)
+            if guess not in self.guesses:
+                return guess
+    def send_number(self):
+        guess = self.next_guess()
+        self.guesses.append(guess)
+        self.send(format(guess))
+\end{codebox}
+
+第三条命令从客户端接收关于该猜测是更接近、更远、相同还是正确的判定，并据此更新 \texttt{ServerSession} 的状态：
+
+\begin{codebox}[python]
+    def receive_report(self, decision):
+        last = self.guesses[-1]
+        if decision == CORRECT:
+            self.secret = last
+        print(f"Server: {last} is {decision}")
+\end{codebox}
+
+最后一条命令清除状态，以结束一局游戏，无论它是否成功：
+
+\begin{codebox}[python]
+    def clear_state(self):
+        self.lower = None
+        self.upper = None
+        self.secret = None
+        self.guesses = []
+\end{codebox}
+
+一局游戏通过 \texttt{with} 语句发起，以确保服务器端状态被正确管理（背景参见 Item 82：考虑用 \texttt{contextlib} 和 \texttt{with} 语句实现可复用的 \texttt{try}/\texttt{finally} 行为，另一个例子见 Item 78：用对 \texttt{async} 友好的工作线程最大化 \texttt{asyncio} 事件循环（event loop）的响应能力）。这个 \texttt{new\_game} 函数向服务器发送第一条和最后一条命令，并提供一个在整局游戏期间使用的上下文对象：
+
+\begin{codebox}[python]
+import contextlib
+@contextlib.contextmanager
+def new_game(connection, lower, upper, secret):
+    print(
+        f"Guess a number between {lower} and {upper}!"
+        f" Shhhhh, it's {secret}."
+    )
+    connection.send(f"PARAMS {lower} {upper}")
+    try:
+        yield ClientSession(
+            connection.send,
+            connection.receive,
+            secret,
+        )
+    finally:
+        connection.send("CLEAR")
+\end{codebox}
+
+我使用一个有状态类（stateful class），它为游戏动作和引用提供了辅助方法，用以管理每一局游戏会话（参见 Item 48：对简单接口接受函数而非类，了解我为何显式传入 \texttt{send} 和 \texttt{receive}）：
+
+\begin{codebox}[python]
+import math
+class ClientSession:
+    def __init__(self, send, receive, secret):
+        self.send = send
+        self.receive = receive
+        self.secret = secret
+        self.last_distance = None
+\end{codebox}
+
+使用实现第二条命令的方法，向服务器请求新的猜测值：
+
+\begin{codebox}[python]
+    def request_number(self):
+        self.send("NUMBER")
+        data = self.receive()
+        return int(data)
+\end{codebox}
+
+服务器每次猜测相比上一次是更接近还是更远，通过第三条命令来报告：
+
+\begin{codebox}[python]
+    def report_outcome(self, number):
+        new_distance = math.fabs(number - self.secret)
+        if new_distance == 0:
+            decision = CORRECT
+        elif self.last_distance is None:
+            decision = UNSURE
+        elif new_distance < self.last_distance:
+            decision = WARMER
+        elif new_distance > self.last_distance:
+            decision = COLDER
+        else:
+            decision = SAME
+        self.last_distance = new_distance
+        self.send(f"REPORT {decision}")
+        return decision
+\end{codebox}
+
+游戏会话对象可以被迭代（背景见 Item 21：迭代参数时要保持防御性），从而不断做出新的、唯一的猜测，直到找到正确答案为止：
+
+\begin{codebox}[python]
+    def __iter__(self):
+        while True:
+            number = self.request_number()
+            decision = self.report_outcome(number)
+            yield number, decision
+            if decision == CORRECT:
+                return
+\end{codebox}
+
+我可以通过让一个线程（thread）在套接字（socket）上监听，并派生额外的线程来处理每一个新客户端连接，从而运行服务器：
+
+\begin{codebox}[python]
+import socket
+from threading import Thread
+def handle_connection(connection):
+    with connection:
+        session = ServerSession(connection)
+        try:
+            session.loop()
+        except EOFError:
+            pass
+def run_server(address):
+    with socket.socket() as listener:
+        listener.bind(address)
+        listener.listen()
+        while True:
+            connection, _ = listener.accept()
+            thread = Thread(
+                target=handle_connection,
+                args=(connection,),
+                daemon=True,
+            )
+            thread.start()
+\end{codebox}
+
+客户端运行在主线程（main thread）中，并将猜数字游戏的结果返回给调用者。这段代码或许有点笨拙，但它演练了多种 Python 语言特性（\texttt{for} 循环、\texttt{with} 语句、生成器（generator）、推导式（comprehension）、迭代器（iterator）协议），以便我在下面展示把其中每一项移植到协程（coroutine）用法所需的改动：
+
+\begin{codebox}[python]
+def run_client(address):
+    with socket.create_connection(address) as server_sock:
+        server = Connection(server_sock)
+        with new_game(server, 1, 5, 3) as session:
+            results = [outcome for outcome in session]
+        with new_game(server, 10, 15, 12) as session:
+            for outcome in session:
+                results.append(outcome)
+        with new_game(server, 1, 3, 2) as session:
+            it = iter(session)
+            while True:
+                try:
+                    outcome = next(it)
+                except StopIteration:
+                    break
+                else:
+                    results.append(outcome)
+    return results
+\end{codebox}
+
+最后，我可以把这一切组合起来，确认它能够按预期工作：
+
+\begin{codebox}[python]
+def main():
+    address = ("127.0.0.1", 1234)
+    server_thread = Thread(
+        target=run_server, args=(address,), daemon=True
+    )
+    server_thread.start()
+    results = run_client(address)
+    for number, outcome in results:
+        print(f"Client: {number} is {outcome}")
+main()
+>>>
+Guess a number between 1 and 5! Shhhhh, it's 3.
+Server: 4 is Unsure
+Server: 1 is Colder
+Server: 5 is Same
+Server: 3 is Correct
+Guess a number between 10 and 15! Shhhhh, it's 12.
+Server: 11 is Unsure
+Server: 10 is Colder
+Server: 12 is Correct
+Guess a number between 1 and 3! Shhhhh, it's 2.
+Server: 3 is Unsure
+Server: 2 is Correct
+Client: 4 is Unsure
+Client: 1 is Colder
+Client: 5 is Same
+Client: 3 is Correct
+Client: 11 is Unsure
+Client: 10 is Colder
+Client: 12 is Correct
+Client: 3 is Unsure
+Client: 2 is Correct
+\end{codebox}
+
+把本例改写成使用 \texttt{async}、\texttt{await} 以及内置的 \texttt{asyncio} 模块，需要多少工作量？
+
+首先，我需要更新自己的 \texttt{Connection} 类，使其提供 \texttt{send} 和 \texttt{receive} 的协程（coroutine）方法，而不是阻塞式 I/O 方法。我用 \texttt{\# Changed} 注释标出了每一处改动，以便清楚看出这个新示例与上方代码之间的差异：
+
+\begin{codebox}[python]
+class AsyncConnection:
+    def __init__(self, reader, writer):      # 已修改
+        self.reader = reader                 # 已修改
+        self.writer = writer                 # 已修改
+    async def send(self, command):
+        line = command + "\n"
+        data = line.encode()
+        self.writer.write(data)              # 已修改
+        await self.writer.drain()            # 已修改
+    async def receive(self):
+        line = await self.reader.readline()  # 已修改
+        if not line:
+            raise EOFError("Connection closed")
+        return line[:-1].decode()
+\end{codebox}
+
+我可以创建另一个有状态类（stateful class），来表示单个连接的服务器会话状态。这里唯一的改动是类名，以及继承自 \texttt{AsyncConnection} 而非 \texttt{Connection}：
+
+\begin{codebox}[python]
+class AsyncServerSession(AsyncConnection):  # 已修改
+    def __init__(self, *args):
+        ...
+\end{codebox}
+
+服务器命令处理循环的主要入口，只需极小的改动就能变成一个协程（coroutine）：
+
+\begin{codebox}[python]
+    async def loop(self):                       # 已修改
+        while command := await self.receive():  # 已修改
+            match command.split(" "):
+                case "PARAMS", lower, upper:
+                    self.set_params(lower, upper)
+                case ["NUMBER"]:
+                    await self.send_number()    # 已修改
+                case "REPORT", decision:
+                    self.receive_report(decision)
+                case ["CLEAR"]:
+                    self.clear_state()
+                case _:
+                    raise UnknownCommandError(command)
+\end{codebox}
+
+处理第一条命令无需任何改动：
+
+\begin{codebox}[python]
+    def set_params(self, lower, upper):
+        ...
+\end{codebox}
+
+第二条命令所需的唯一改动，是允许在把猜测值传给客户端时使用异步 I/O：
+
+\begin{codebox}[python]
+    def next_guess(self):
+        ...
+    async def send_number(self):                    # 已修改
+        guess = self.next_guess()
+        self.guesses.append(guess)
+        await self.send(format(guess))              # 已修改
+\end{codebox}
+
+第三和第四条命令无需改动：
+
+\begin{codebox}[python]
+    def receive_report(self, decision):
+        ...
+    def clear_state(self):
+        ...
+\end{codebox}
+
+在客户端发起新游戏，需要为发送第一条和最后一条命令添加几个 \texttt{async} 和 \texttt{await} 关键字。它还需要使用来自内置 \texttt{contextlib} 模块的 \texttt{asynccontextmanager} 辅助函数：
+
+\begin{codebox}[python]
+@contextlib.asynccontextmanager                       # 已修改
+async def new_async_game(
+    connection, lower, upper, secret):                # 已修改
+    print(
+        f"Guess a number between {lower} and {upper}!"
+        f" Shhhhh, it's {secret}."
+    )
+    await connection.send(f"PARAMS {lower} {upper}")   # 已修改
+    try:
+        yield AsyncClientSession(
+            connection.send,
+            connection.receive,
+            secret,
+        )
+    finally:
+        await connection.send("CLEAR")                # 已修改
+\end{codebox}
+
+用于表示游戏状态的 \texttt{ClientSession} 类的异步版本，其构造函数与之前相同：
+
+\begin{codebox}[python]
+class AsyncClientSession:
+    def __init__(self, send, receive, secret):
+        ...
+\end{codebox}
+
+第二条命令只需在需要异步行为的地方添加 \texttt{async} 和 \texttt{await}：
+
+\begin{codebox}[python]
+    async def request_number(self):
+        await self.send("NUMBER")    # 已修改
+        data = await self.receive()  # 已修改
+        return int(data)
+\end{codebox}
+
+第三条命令只需添加一个 \texttt{async} 和一个 \texttt{await} 关键字：
+
+\begin{codebox}[python]
+    async def report_outcome(self, number):    # 已修改
+        new_distance = math.fabs(number - self.secret)
+        if new_distance == 0:
+            decision = CORRECT
+        elif self.last_distance is None:
+            decision = UNSURE
+        elif new_distance < self.last_distance:
+            decision = WARMER
+        elif new_distance > self.last_distance:
+            decision = COLDER
+        else:
+            decision = SAME
+        self.last_distance = new_distance
+        await self.send(f"REPORT {decision}")         # 已修改
+        return decision
+\end{codebox}
+
+为了支持异步迭代，我需要实现 \texttt{\_\_aiter\_\_} 而不是 \texttt{\_\_iter\_\_}，并相应添加 \texttt{async} 和 \texttt{await}：
+
+\begin{codebox}[python]
+    async def __aiter__(self):                        # 已修改
+        while True:
+            number = await self.request_number()      # 已修改
+             decision = await self.report_outcome(
+    number)                               # 已修改
+            yield number, decision
+            if decision == CORRECT:
+                return
+\end{codebox}
+
+运行服务器的代码需要完全重新实现，以使用内置的 \texttt{asyncio} 模块及其 \texttt{start\_server} 函数：
+
+\begin{codebox}[python]
+import asyncio
+async def handle_async_connection(reader, writer):
+    session = AsyncServerSession(reader, writer)
+    try:
+        await session.loop()
+    except EOFError:
+        pass
+async def run_async_server(address):
+    server = await asyncio.start_server(
+        handle_async_connection, *address
+    )
+    async with server:
+        await server.serve_forever()
+\end{codebox}
+
+发起游戏的 \texttt{run\_client} 函数几乎每一行都需要改动。任何此前与阻塞式 \texttt{socket} 实例交互的代码，都必须替换为功能类似的 \texttt{asyncio} 版本（在下方用 \texttt{\# New} 标出）。函数里其余所有需要与协程（coroutine）交互的代码行，都要使用 \texttt{async} 和 \texttt{await} 关键字；使用协程特有的函数如 \texttt{aiter} 和 \texttt{anext}；或使用异步特有的常量如 \texttt{StopAsyncIteration}。如果你在必要之处忘记添加其中某个关键字，运行时就会抛出异常（exception）。
+
+\begin{codebox}[python]
+async def run_async_client(address):
+    streams = await asyncio.open_connection(*address)  # 新增
+    client = AsyncConnection(*streams)                 # 新增
+    async with new_async_game(client, 1, 5, 3) as session:
+        results = [outcome async for outcome in session]
+    async with new_async_game(client, 10, 15, 12) as session:
+        async for outcome in session:
+            results.append(outcome)
+    async with new_async_game(client, 1, 3, 2) as session:
+        it = aiter(session)
+        while True:
+            try:
+                outcome = await anext(it)
+            except StopAsyncIteration:
+                break
+            else:
+                results.append(outcome)
+    _, writer = streams                                # 新增
+    writer.close()                                     # 新增
+    await writer.wait_closed()                         # 新增
+    return results
+\end{codebox}
+
+\texttt{run\_async\_client} 最有趣的地方在于，为了把这个函数移植为使用协程（coroutine），我根本不需要重新组织任何与 \texttt{AsyncClient} 交互的实质部分。我所用到的每一种语言特性，都有对应的异步版本，这让迁移变得轻而易举。
+
+这种转换并非总是一帆风顺。例如，在标准库（standard library）中，目前还没有来自 \texttt{itertools} 的实用函数的异步版本（参见 Item 24：考虑用 \texttt{itertools} 处理迭代器和生成器）。同样也没有 \texttt{yield from} 的异步版本（参见 Item 45：用 \texttt{yield from} 组合多个生成器），这让组合生成器（generator）时显得更啰嗦。许多社区库（community library）有助于填补这些空白（参见 Item 116：了解去哪里寻找社区构建的模块），但这仍可能需要额外的工作，具体取决于你代码的复杂度。
+
+最后，需要更新「胶水」代码，以端到端地运行这个新异步示例。我使用 \texttt{asyncio.create\_task} 函数把服务器排入事件循环（event loop）上执行，这样当遇到 \texttt{await} 表达式时，它就会与客户端并行运行。这是另一种实现扇出（fan-out）的方式，其行为不同于 \texttt{asyncio.gather} 函数所发生的情况：
+
+\begin{codebox}[python]
+async def main_async():
+    address = ("127.0.0.1", 4321)
+    server = run_async_server(address)
+    asyncio.create_task(server)
+    results = await run_async_client(address)
+    for number, outcome in results:
+        print(f"Client: {number} is {outcome}")
+asyncio.run(main_async())
+>>>
+Guess a number between 1 and 5! Shhhhh, it's 3.
+Server: 5 is Unsure
+Server: 4 is Warmer
+Server: 2 is Same
+Server: 1 is Colder
+Server: 3 is Correct
+Guess a number between 10 and 15! Shhhhh, it's 12.
+Server: 14 is Unsure
+Server: 10 is Same
+Server: 15 is Colder
+Server: 12 is Correct
+Guess a number between 1 and 3! Shhhhh, it's 2.
+Server: 2 is Correct
+Client: 5 is Unsure
+Client: 4 is Warmer
+Client: 2 is Same
+Client: 1 is Colder
+Client: 3 is Correct
+Client: 14 is Unsure
+Client: 10 is Same
+Client: 15 is Colder
+Client: 12 is Correct
+Client: 2 is Correct
+\end{codebox}
+
+它按预期工作。协程（coroutine）版本更易于理解，因为所有与线程（thread）的交互都被移除了。内置的 \texttt{asyncio} 模块还提供了许多辅助函数，减少了编写此类服务器所需的套接字（socket）样板代码（boilerplate code）量。
+
+你的用例可能因为各种原因而更难以移植。\texttt{asyncio} 模块拥有大量的 I/O、同步（synchronization）和任务管理特性，能让采用协程（coroutine）对你而言更加容易（参见 Item 77：混用线程与协程以缓解向 \texttt{asyncio} 的过渡以及 Item 78：用对 \texttt{async} 友好的工作线程最大化 \texttt{asyncio} 事件循环（event loop）的响应能力）。务必查阅该库的在线文档（\texttt{https://docs.python.org/3/library/asyncio.html}）以了解其全部潜力。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 提供了 \texttt{for} 循环、\texttt{with} 语句、生成器（generator）、推导式（comprehension）、迭代器（iterator）以及库辅助函数的异步版本，它们可以作为原地替换（drop-in replacement）在协程（coroutine）中使用。
+\item 内置的 \texttt{asyncio} 模块让将使用线程（thread）和阻塞式 I/O 的现有代码移植到协程（coroutine）与异步 I/O，变得轻而易举。
+\end{itemize}
+
+\section{Item 77: 混用线程与协程以平稳过渡到 asyncio}
+
+在上一个条目（参见 Item 76（"了解如何将基于线程的 I/O 移植到 asyncio"））中，我将一个使用线程执行阻塞式 I/O 的 TCP 服务器移植为使用 \texttt{asyncio} 与协程（coroutine）。那是一次「一步到位」式的整体迁移：我把全部代码一次性改成了新风格。但要这样移植一个大型程序几乎不现实。相反，我们通常需要在逐步迁移代码库的同时，按需更新测试，并在每一步都验证一切是否正常工作。
+
+为了做到这一点，你的代码库需要能够同时使用线程处理阻塞式 I/O（参见 Item 68（"使用线程处理阻塞式 I/O，但避免用于并行"）），以及使用协程处理异步 I/O（参见 Item 75（"用协程实现高并发 I/O"）），并且两者要相互兼容。具体来说，这意味着你需要让线程能够运行协程，也需要让协程能够启动并等待线程。幸运的是，\texttt{asyncio} 内置了一些设施，使这种互操作变得轻而易举。
+
+举个例子，假设我正在编写一个程序，把多个日志文件合并成一个输出流，以便调试。给定一个输入日志的文件句柄（file handle），我需要一种方式来判断是否有新数据可用，并返回下一行输入。我可以借助文件句柄的 \texttt{tell} 方法来检查当前读取位置是否等于文件长度，从而做到这一点。当没有新数据时，应当抛出一个异常（背景知识见 Item 32（"优先抛出异常而非返回 None"））：
+
+\begin{codebox}[python]
+class NoNewData(Exception):
+    pass
+def readline(handle):
+    offset = handle.tell()
+    handle.seek(0, 2)
+    length = handle.tell()
+    if length == offset:
+        raise NoNewData
+    handle.seek(offset, 0)
+    return handle.readline()
+\end{codebox}
+
+把这个函数包进一个 \texttt{while} 循环中，我就能把它变成一个工作线程（worker thread）。当有新行可用时，我调用一个给定的回调函数（callback），把它写入输出日志（关于为何这里用函数接口而非类，见 Item 48（"简单接口优先接受函数而非类"））。当没有数据可用时，该线程会休眠，以减少轮询（polling）新数据所带来的忙等待（busy waiting）。当输入文件句柄被关闭时，工作线程就会退出：
+
+\begin{codebox}[python]
+import time
+def tail_file(handle, interval, write_func):
+    while not handle.closed:
+        try:
+            line = readline(handle)
+        except NoNewData:
+            time.sleep(interval)
+        else:
+            write_func(line)
+\end{codebox}
+
+现在，我可以为每个输入文件启动一个工作线程，并把这些线程的输出统一写入同一个输出文件。下面，\texttt{write} 闭包（closure）函数（关于闭包如何与变量作用域及 \texttt{nonlocal} 交互，见 Item 33（"了解闭包如何与变量作用域及 nonlocal 交互"））需要使用一个 \texttt{Lock}（锁）实例（见 Item 69（"用 Lock 防止线程中的数据竞争"）），以便对写入输出流的操作进行串行化（serialize），并确保不会出现行内冲突：
+
+\begin{codebox}[python]
+from threading import Lock, Thread
+def run_threads(handles, interval, output_path):
+    with open(output_path, "wb") as output:
+        lock = Lock()
+        def write(data):
+            with lock:
+                output.write(data)
+        threads = []
+        for handle in handles:
+            args = (handle, interval, write)
+            thread = Thread(target=tail_file, args=args)
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join()
+\end{codebox}
+
+只要某个输入文件句柄仍然存活，其对应的工作线程也会保持存活。这意味着，只需等待每个线程的 \texttt{join} 方法执行完毕，就能知道整个处理过程已经结束。
+
+给定一个输入路径集合与一个输出路径，我可以调用 \texttt{run\_threads} 并确认它如预期般工作。至于输入文件句柄是如何创建的、又是如何被单独关闭的，对于演示这段代码的行为并不重要；用于校验输出的函数——定义在后面 \texttt{confirm\_merge} 中——同样如此，这也是我把它们省略的原因：
+
+\begin{codebox}[python]
+def confirm_merge(input_paths, output_path):
+    ...
+input_paths = ...
+handles = ...
+output_path = ...
+run_threads(handles, 0.1, output_path)
+confirm_merge(input_paths, output_path)
+\end{codebox}
+
+以这个基于线程的实现为起点，我该如何逐步把这段代码改写成使用 \texttt{asyncio} 和协程呢？有两种思路：自顶向下（top-down）与自底向上（bottom-up）。
+
+\subsection{自顶向下方法}
+
+自顶向下指的是从代码库最高层的部分入手，比如 \texttt{main} 入口点，再向下推进到调用层次（call hierarchy）中作为「叶子」的各个函数与类。当你维护着大量被许多不同程序共用的公共模块时，这种方法会很有用。通过先移植入口点，你可以把公共模块的移植推迟到其余各处都已经用上协程之后再进行。
+
+下面这些是具体的步骤：
+
+\begin{enumerate}
+\item 把一个顶层函数改为使用 \texttt{async def} 而非 \texttt{def}。
+\item 把其中所有会执行 I/O（可能阻塞事件循环）的调用，改用 \texttt{asyncio.run\_in\_executor} 来包装。
+\item 确保 \texttt{run\_in\_executor} 调用所使用的资源或回调得到妥善的同步（例如，配合一个用于扇入（fan-in）的事件循环实例，使用 \texttt{Lock} 或 \texttt{asyncio.run\_coroutine\_threadsafe} 函数）。
+\item 顺着调用层次向下推进，把中间层级的函数与方法转换为协程，从而尝试消除 \texttt{get\_event\_loop} 和 \texttt{run\_in\_executor} 调用（遵循前三个步骤）。
+\end{enumerate}
+
+这里我把第 1–3 步应用到 \texttt{run\_threads} 函数上：
+
+\begin{codebox}[python]
+import asyncio
+async def run_tasks_mixed(handles, interval, output_path):
+    loop = asyncio.get_event_loop()
+     output = await loop.run_in_executor(
+    None, open, output_path, "wb")
+    try:
+        async def write_async(data):
+            await loop.run_in_executor(None, output.write, data)
+        def write(data):
+            coro = write_async(data)
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            future.result()
+        tasks = []
+        for handle in handles:
+            task = loop.run_in_executor(
+                None, tail_file, handle, interval, write
+            )
+            tasks.append(task)
+        await asyncio.gather(*tasks)
+    finally:
+        await loop.run_in_executor(None, output.close)
+\end{codebox}
+
+\texttt{run\_in\_executor} 方法会指示事件循环使用一个 \texttt{ThreadPoolExecutor} 来运行给定函数（其中可能包含阻塞式 I/O），从而确保它不会干扰事件循环所在的线程（背景见 Item 74（"当并发需要线程时考虑使用 ThreadPoolExecutor"））。通过多次调用 \texttt{run\_in\_executor} 而不立即写对应的 \texttt{await} 表达式，\texttt{run\_tasks\_mixed} 协程会扇出（fan out），为每个输入文件各开一条并发执行线。随后 \texttt{asyncio.gather} 会把 \texttt{tail\_file} 的各个线程扇入（fan in），直到它们全部完成（关于扇出与扇入的更多内容，见 Item 71（"了解何时真正需要并发"））。
+
+这段代码通过使用 \texttt{asyncio.run\_coroutine\_threadsafe}，省去了 \texttt{write} 辅助函数中的 \texttt{Lock} 实例。这个函数允许普通的老式线程去调用一个协程（本例中是 \texttt{write\_async}），并让它在显式提供的主线程事件循环中执行。这有效地把各个工作线程彼此同步起来，确保所有对输出文件的写入都是一次一个地串行发生。一旦 \texttt{asyncio.TaskGroup} 这个可等待对象（awaitable）被解除（resolved），我就可以假定对输出文件的所有写入也都已完成，于是可以放心关闭输出文件句柄，而不必担心竞态条件（race condition）。
+
+我可以使用 \texttt{asyncio.run} 函数来启动协程并运行主事件循环，从而验证这段代码确实如预期般工作：
+
+\begin{codebox}[python]
+input_paths = ...
+handles = ...
+output_path = ...
+asyncio.run(run_tasks_mixed(handles, 0.1, output_path))
+confirm_merge(input_paths, output_path)
+\end{codebox}
+
+现在，通过顺着调用栈（call stack）向下推进，我可以把第 4 步应用到 \texttt{run\_tasks\_mixed} 函数上。按照第 1–3 步，我可以把依赖的 \texttt{tail\_file} 函数重定义为一个异步协程，而不是执行阻塞式 I/O：
+
+\begin{codebox}[python]
+async def tail_async(handle, interval, write_func):
+    loop = asyncio.get_event_loop()
+    while not handle.closed:
+        try:
+             line = await loop.run_in_executor(
+    None, readline, handle)
+        except NoNewData:
+            await asyncio.sleep(interval)
+        else:
+            await write_func(line)
+\end{codebox}
+
+新的 \texttt{tail\_async} 函数使我能够去掉 \texttt{run\_tasks\_mixed} 函数里对 \texttt{run\_coroutine\_threadsafe} 的调用，以及那个 \texttt{write} 包装函数。我还可以使用 \texttt{asyncio.TaskGroup}（Python 3.11 新增）来管理 \texttt{tail\_async} 协程的扇出与扇入，进一步缩短代码：
+
+\begin{codebox}[python]
+async def run_tasks(handles, interval, output_path):
+    loop = asyncio.get_event_loop()
+     output = await loop.run_in_executor(
+    None, open, output_path, "wb")
+    try:
+        async def write_async(data):
+            await loop.run_in_executor(None, output.write, data)
+        async with asyncio.TaskGroup() as group:
+            for handle in handles:
+                group.create_task(
+                    tail_async(handle, interval, write_async)
+                )
+    finally:
+        await loop.run_in_executor(None, output.close)
+\end{codebox}
+
+我同样可以验证 \texttt{run\_tasks} 确实如预期般工作：
+
+\begin{codebox}[python]
+input_paths = ...
+handles = ...
+output_path = ...
+asyncio.run(run_tasks(handles, 0.1, output_path))
+confirm_merge(input_paths, output_path)
+\end{codebox}
+
+继续沿用这种重构思路，把 \texttt{readline} 也转换成一个异步协程是可能的。然而，那个函数需要太多阻塞式的文件 I/O 操作，考虑到那样做会严重损害代码的清晰度，似乎不值得移植。有些场景下，把所有东西都迁移到 \texttt{asyncio} 是合理的；而另一些场景下则不然。
+
+\subsection{自底向上方法}
+
+采用协程的自底向上方法同样包含四个步骤，与自顶向下风格的步骤相似，但过程沿着调用层次的相反方向推进：从叶子到入口点。
+
+下面这些是具体的步骤：
+
+\begin{enumerate}
+\item 为你想要移植的每个叶子函数，创建一个全新的异步协程版本。
+\item 修改现有的同步函数，让它们调用协程版本并运行事件循环，而不是实现任何真正的异步行为。
+\item 向上移动一层调用层次，再构造一层协程，并把对同步函数的现有调用替换为对第 1 步所定义协程的调用。
+\item 当你不再需要第 2 步中创建的同步包装器来把各部分粘合在一起时，就把它们删掉。
+\end{enumerate}
+
+以上面的例子而言，我会从 \texttt{tail\_file} 函数开始，因为我已经决定让 \texttt{readline} 函数继续沿用阻塞式 I/O。我可以把 \texttt{tail\_file} 重写，使其仅仅是包装上面定义的 \texttt{tail\_async} 协程。所提供的 \texttt{write\_func} 使用阻塞式 I/O，它可以由 \texttt{write\_async} 函数通过 \texttt{run\_in\_executor} 来运行，从而与 \texttt{tail\_async} 的期望相兼容。为了把每个工作协程一直运行到结束，我可以为每个 \texttt{tail\_file} 线程创建一个事件循环，然后调用它的 \texttt{run\_until\_complete} 方法。这个方法会阻塞当前线程并驱动事件循环，直到 \texttt{tail\_async} 协程退出，从而得到与基于线程、使用阻塞式 I/O 的 \texttt{tail\_file} 版本相同的行为：
+
+\begin{codebox}[python]
+def tail_file(handle, interval, write_func):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    async def write_async(data):
+        await loop.run_in_executor(None, write_func, data)
+    coro = tail_async(handle, interval, write_async)
+    loop.run_until_complete(coro)
+\end{codebox}
+
+这个新的 \texttt{tail\_file} 函数是旧版的「即插即用」替代品。我可以再次调用 \texttt{run\_threads} 来验证一切如预期般工作：
+
+\begin{codebox}[python]
+input_paths = ...
+handles = ...
+output_path = ...
+run_threads(handles, 0.1, output_path)
+confirm_merge(input_paths, output_path)
+\end{codebox}
+
+在把 \texttt{tail\_async} 用 \texttt{tail\_file} 包装好之后，下一步是把 \texttt{run\_threads} 函数转换成一个协程。这最终与上面自顶向下方法的第 4 步是同样的工作，因此到了这一步，两种风格的路线就汇合了。
+
+这一切都是采用 \texttt{asyncio} 的良好开端，不过你还可以做更多事情来提升程序的响应性（见 Item 78（"用 async 友好的工作线程最大化 asyncio 事件循环的响应性"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{asyncio} 事件循环的可等待（awaitable）\texttt{run\_in\_executor} 方法，使协程能够在 \texttt{ThreadPoolExecutor} 的工作线程中运行同步函数。这有助于自顶向下地迁移到 asyncio。
+\item \texttt{asyncio} 事件循环的 \texttt{run\_until\_complete} 方法，使同步代码能够把一个协程运行到结束。\texttt{asyncio.run\_coroutine\_threadsafe} 函数则提供了跨线程边界的同等功能。两者共同助力自底向上地迁移到 asyncio。
+\end{itemize}
+
+\section{Item 78: 用对 asyncio 友好的工作线程最大化事件循环的响应性}
+
+在上一个条目中，我展示了如何增量式地迁移到 \texttt{asyncio}（参见 Item 77（「混用线程与协程，以平滑过渡到 asyncio」）了解背景以及下文各个函数的实现）。得到的协程能正确地跟踪输入文件，并将它们合并为单一输出：
+
+\begin{codebox}[python]
+import asyncio
+async def run_tasks(handles, interval, output_path):
+    loop = asyncio.get_event_loop()
+     output = await loop.run_in_executor(
+    None, open, output_path, "wb")
+    try:
+        async def write_async(data):
+            await loop.run_in_executor(None, output.write, data)
+        async with asyncio.TaskGroup() as group:
+            for handle in handles:
+                group.create_task(
+                    tail_async(handle, interval, write_async)
+                )
+    finally:
+        await loop.run_in_executor(None, output.close)
+\end{codebox}
+
+这段代码充斥着 \texttt{run\_in\_executor} 的样板代码，既啰嗦又重复，只是为了处理同步与异步函数调用之间的边界。如果我接受这样一个事实——对 \texttt{output} 文件句柄调用 \texttt{open}、\texttt{close} 和 \texttt{write} 会阻塞事件循环（event loop）——那么函数本可以短得多；而且对于像这样合并多个文件句柄的用途来说，它在功能上也是正确的：
+
+\begin{codebox}[python]
+async def run_tasks_simpler(handles, interval, output_path):
+    with open(output_path, "wb") as output:  # 已修改
+        async def write_async(data):
+            output.write(data)               # 已修改
+        async with asyncio.TaskGroup() as group:
+            for handle in handles:
+                group.create_task(
+                    tail_async(handle, interval, write_async)
+                )
+\end{codebox}
+
+然而，像这样避免使用 \texttt{run\_in\_executor} 是不好的，因为这些操作都需要向程序所在的主机操作系统发起系统调用，这可能会长时间阻塞事件循环，阻碍其他协程推进。这会损害整体的响应性、增加延迟，对于事件循环被许多组件（例如高度并发的服务器）共享的程序来说尤其如此。
+
+但是，阻塞事件循环到底有多糟？在实践中它又有多常发生？我可以通过向 \texttt{asyncio.run} 函数传入 \texttt{debug=True} 参数，来检测真实程序中何时出现了这个问题。下面演示如何定位一个「坏」协程所在的文件与行号——它大概卡在某次缓慢的系统调用上了：
+
+\begin{codebox}[python]
+import time
+async def slow_coroutine():
+    time.sleep(0.5)  # 模拟缓慢的 I/O
+asyncio.run(slow_coroutine(), debug=True)
+>>>
+Executing <Task finished name='Task-1' coro=<slow_coroutine()
+'done, defined at example.py:61> result=None created at
+'.../asyncio/runners.py:100> took 0.506 seconds
+...
+\end{codebox}
+
+如果我想让程序尽可能具有响应性，那就需要尽量减少在主事件循环内部发起的系统调用。使用 \texttt{run\_in\_executor} 是一种办法，但它需要大量样板代码，如上所示。一种潜在更好的替代方案是创建一个新的 \texttt{Thread} 子类（参见 Item 68（「用线程处理阻塞式 I/O；不要用于并行」）），用它封装写入输出文件所需的一切，而这个子类使用自己独立的事件循环：
+
+\begin{codebox}[python]
+from threading import Thread
+class WriteThread(Thread):
+    def __init__(self, output_path):
+        super().__init__()
+        self.output_path = output_path
+        self.output = None
+        self.loop = asyncio.new_event_loop()
+    def run(self):
+        asyncio.set_event_loop(self.loop)
+        with open(self.output_path, "wb") as self.output:
+            self.loop.run_forever()
+        # 再跑最后一轮回调，以便在另一个事件循环中对
+        # stop() 的 await 能够得以完成。
+        self.loop.run_until_complete(asyncio.sleep(0))
+\end{codebox}
+
+其他线程中的协程可以直接调用并 \texttt{await} 这个类的 \texttt{write} 方法，因为它不过是对真正执行 I/O 的 \texttt{real\_write} 方法的一个线程安全包装。这样就不再需要 \texttt{Lock}（参见 Item 69（「用 Lock 防止线程中的数据竞争」））：
+
+\begin{codebox}[python]
+    async def real_write(self, data):
+        self.output.write(data)
+    async def write(self, data):
+        coro = self.real_write(data)
+        future = asyncio.run_coroutine_threadsafe(
+            coro, self.loop)
+        await asyncio.wrap_future(future)
+\end{codebox}
+
+其他协程也可以用类似的样板代码，以线程安全的方式告知工作线程何时停止：
+
+\begin{codebox}[python]
+    async def real_stop(self):
+        self.loop.stop()
+    async def stop(self):
+        coro = self.real_stop()
+        future = asyncio.run_coroutine_threadsafe(
+            coro, self.loop)
+        await asyncio.wrap_future(future)
+\end{codebox}
+
+我还可以定义 \texttt{\_\_aenter\_\_} 和 \texttt{\_\_aexit\_\_} 方法，让这个类能在 \texttt{with} 语句中使用（参见 Item 82（「考虑用 contextlib 和 with 语句实现可复用的 try/finally 行为」）以及 Item 76（「了解如何将线程式 I/O 移植到 asyncio」）了解背景）。这能确保工作线程在恰当的时机启动和停止，同时又不会拖慢主事件循环线程：
+
+\begin{codebox}[python]
+    async def __aenter__(self):
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.start)
+        return self
+    async def __aexit__(self, *_):
+        await self.stop()
+\end{codebox}
+
+有了这个新的 \texttt{WriteThread} 类，我可以把 \texttt{run\_tasks} 重构为一个完全异步的版本：它易于阅读，不会干扰主事件循环的默认执行器（executor），并且彻底避免在主事件循环线程中运行缓慢的系统调用：
+
+\begin{codebox}[python]
+def readline(handle):
+    ...
+async def tail_async(handle, interval, write_func):
+    ...
+async def run_fully_async(handles, interval, output_path):
+    async with (
+        WriteThread(output_path) as output,
+        asyncio.TaskGroup() as group,
+    ):
+        for handle in handles:
+            group.create_task(
+                tail_async(handle, interval, output.write)
+            )
+\end{codebox}
+
+给定一组输入句柄和一个输出文件路径，我可以验证它确实按预期工作：
+
+\begin{codebox}[python]
+def confirm_merge(input_paths, output_path):
+    ...
+input_paths = ...
+handles = ...
+output_path = ...
+asyncio.run(run_fully_async(handles, 0.1, output_path))
+confirm_merge(input_paths, output_path)
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在协程中发起系统调用——包括阻塞式 I/O 与启动线程——会降低程序的响应性，并让人感觉延迟更高。
+\item 向 \texttt{asyncio.run} 传入 \texttt{debug=True} 参数，以检测某些协程何时阻碍了事件循环快速响应。
+\item 为了提升那些必须跨越异步与同步执行边界的代码的可读性，可以考虑定义一些辅助线程类，它们提供对协程友好的接口。
+\end{itemize}
+
+\section{Item 79: 考虑用 concurrent.futures 实现真正的并行}
+
+在编写 Python 程序的过程中，你迟早可能会撞上一堵性能墙。即便已经优化了 Python 代码（参见 Item 92（「优化前先剖析」）），程序的执行速度可能仍然无法满足你的需要。在现代计算机上，CPU 核心数越来越多，因此有理由假设，一种解决方案可能就是并行（parallelism）。如果能把代码的计算拆分成独立的工作单元，让它们在多个 CPU 核心上同时运行，会怎样呢？
+
+遗憾的是，Python 的全局解释器锁（GIL，Global Interpreter Lock）在大多数情况下会阻止 Python 线程实现真正的 CPU 并行（参见 Item 68（「用线程处理阻塞式 I/O；不要用于并行」））。但是，\texttt{multiprocessing} 内置模块——它可以很方便地通过 \texttt{concurrent.futures} 内置模块来使用——也许正是你所需要的（参见 Item 74（「当必须用线程来实现并发时，考虑用 ThreadPoolExecutor」）查看相关示例）。\texttt{multiprocessing} 通过把额外的解释器作为子进程来运行，使 Python 能够并行地利用多个 CPU 核心。这些子进程与主解释器相互分离，因此它们的全局解释器锁也是各自独立的。每个子进程都能充分利用一个 CPU 核心。每个子进程还与主进程保持一条链路，从中接收执行计算的指令并返回结果。
+
+举例来说，假设我想用 Python 做一些计算密集的工作，并充分利用多个 CPU 核心。我将使用一种「求两个数最大公约数」的实现，来作为更计算密集型算法（例如用 Navier–Stokes 方程模拟流体动力学）的替身（proxy）：
+
+\begin{codebox}[python]
+# my_module.py
+def gcd(pair):
+    a, b = pair
+    low = min(a, b)
+    for i in range(low, 0, -1):
+        if a % i == 0 and b % i == 0:
+            return i
+    raise RuntimeError("Not reachable")
+\end{codebox}
+
+串行地运行这个函数，耗时随数据量线性增长，因为它没有任何并行：
+
+\begin{codebox}[python]
+# run_serial.py
+import my_module
+import time
+NUMBERS = [
+    (19633090, 22659730),
+    (20306770, 38141720),
+    (15516450, 22296200),
+    (20390450, 20208020),
+    (18237120, 19249280),
+    (22931290, 10204910),
+    (12812380, 22737820),
+    (38238120, 42372810),
+    (38127410, 47291390),
+    (12923910, 21238110),
+]
+def main():
+    start = time.perf_counter()
+    results = list(map(my_module.gcd, NUMBERS))
+    end = time.perf_counter()
+    delta = end - start
+    print(f"Took {delta:.3f} seconds")
+if __name__ == "__main__":
+    main()
+>>>
+Took 5.643 seconds
+\end{codebox}
+
+在多个 Python 线程上运行这段代码不会有任何提速，因为 GIL 阻止了 Python 并行使用多个 CPU 核心。下面我做了与上面相同的计算，但使用的是 \texttt{concurrent.futures} 模块及其 \texttt{ThreadPoolExecutor} 类，并启用了八个工作线程（以匹配我电脑上的 CPU 核心数）：
+
+\begin{codebox}[python]
+# run_threads.py
+import my_module
+from concurrent.futures import ThreadPoolExecutor
+import time
+NUMBERS = [
+    ...
+]
+def main():
+    start = time.perf_counter()
+    pool = ThreadPoolExecutor(max_workers=8)
+    results = list(pool.map(my_module.gcd, NUMBERS))
+    end = time.perf_counter()
+    delta = end - start
+    print(f"Took {delta:.3f} seconds")
+if __name__ == "__main__":
+    main()
+>>>
+Took 5.810 seconds
+\end{codebox}
+
+这次反而更慢了，因为启动和与线程池通信带来了额外开销。
+
+接下来是令人惊讶的部分：只改动一行代码，就会发生神奇的事情。如果我把 \texttt{concurrent.futures} 模块中的 \texttt{ThreadPoolExecutor} 换成 \texttt{ProcessPoolExecutor}，一切都会变快：
+
+\begin{codebox}[python]
+# run_parallel.py
+import my_module
+from concurrent.futures import ProcessPoolExecutor
+import time
+NUMBERS = [
+    ...
+]
+def main():
+    start = time.perf_counter()
+    pool = ProcessPoolExecutor(max_workers=8)  # 唯一的改动
+    results = list(pool.map(my_module.gcd, NUMBERS))
+    end = time.perf_counter()
+    delta = end - start
+    print(f"Took {delta:.3f} seconds")
+if __name__ == "__main__":
+    main()
+>>>
+Took 1.684 seconds
+\end{codebox}
+
+在我的多核机器上运行，速度快了非常多！这是怎么做到的？\texttt{ProcessPoolExecutor} 类实际做了以下事情（借助 \texttt{multiprocessing} 模块提供的底层构造）：
+
+1. 它从传入 \texttt{map} 的 \texttt{numbers} 输入数据中取出每一项。
+
+2. 它用 \texttt{pickle} 模块（参见 Item 107（「用 copyreg 让 pickle 序列化更易维护」））把该项序列化为二进制数据。
+
+3. 它通过本地套接字，把序列化后的数据从主解释器进程复制到子解释器进程。
+
+4. 它在子进程中用 \texttt{pickle} 把数据反序列化回 Python 对象。
+
+5. 它导入包含 \texttt{gcd} 函数的 Python 模块。
+
+6. 它与其他子进程并行地，在该输入数据上运行这个函数。
+
+7. 它把结果序列化回二进制数据。
+
+8. 它通过套接字把那段二进制数据复制回来。
+
+9. 它在父进程中把二进制数据反序列化回 Python 对象。
+
+10. 它把来自多个子进程的结果合并为一个 \texttt{list} 返回。
+
+尽管使用 \texttt{pool.map} 方法看起来很简单，但 \texttt{multiprocessing} 模块与 \texttt{ProcessPoolExecutor} 类为了能实现并行，做了海量的工作。在大多数其他语言中，协调两个线程所需的唯一接触点就是一个锁或原子操作（参见 Item 69（「用 Lock 防止线程中的数据竞争」）查看示例）。由于父进程与子进程之间必须进行大量的序列化与反序列化，经由 \texttt{ProcessPoolExecutor} 使用 \texttt{multiprocessing} 的开销很高。
+
+这套方案非常适合某些类型的「隔离」任务。所谓「隔离」，我指的是那些不需要与程序其他部分共享状态的函数。所谓「高杠杆」，我指的是这样一种情形：只需在父进程与子进程之间传输少量数据，就能驱动大量的计算。最大公约数算法就是一例，许多其他数学算法也与之类似。
+
+如果你的计算不具备这些特征，那么 \texttt{ProcessPoolExecutor} 的开销可能会让它无法通过并行化来为你的程序提速。当这种情况发生时，\texttt{multiprocessing} 提供了更高级的设施，用于共享内存、跨进程锁、队列和代理（proxy）。但这些特性都非常复杂。即便只是在被 Python 线程共享的单一进程的内存空间里推理这些工具，就已经够难的了。再把这种复杂性延伸到其他进程、并牵扯进套接字，就更难理解了。
+
+我建议一开始先避开 \texttt{multiprocessing} 内置模块的所有部分。你可以先从使用 \texttt{ThreadPoolExecutor} 类在线程中运行「隔离、高杠杆」的函数开始。之后可以迁移到 \texttt{ProcessPoolExecutor} 以获得提速。最后，当你已经用尽其他所有选择时，才可以考虑直接使用 \texttt{multiprocessing} 模块，或采用更进阶的技术（参见 Item 94（「知道何时以及如何用另一种编程语言替换 Python」））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{multiprocessing} 模块提供了强大的工具，能以极小的代价把某些类型的 Python 计算并行化。
+\item \texttt{multiprocessing} 的能力最好通过 \texttt{concurrent.futures} 内置模块及其简洁的 \texttt{ProcessPoolExecutor} 类来使用。
+\item 在你用尽所有其他选择之前，先避开 \texttt{multiprocessing} 模块中那些高级（且复杂）的部分。
+\end{itemize}

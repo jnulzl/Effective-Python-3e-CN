@@ -1,0 +1,922 @@
+许多程序都围绕处理列表、字典的键/值对以及集合（set）构建。Python 提供了一种名为推导式（comprehension）的特殊语法，用于对这些类型进行简洁的迭代，并创建派生数据结构。推导式能显著提升执行这些常见任务的代码可读性，并带来诸多其他好处。
+
+这种处理风格通过生成器（generator）延伸至函数，使函数能够增量地返回一串值。对生成器函数的调用结果，可用于任何适合迭代器（iterator）的场合（例如 \texttt{for} 循环、星号解包表达式）。生成器能提升性能、降低内存占用、增强可读性，并简化实现。
+
+\section{Item 40: 用推导式替代 map 和 filter}
+
+Python 提供了紧凑的语法，可以从另一个序列或可迭代对象（iterable）派生出一个新列表。这些表达式称为列表推导式（list comprehension）。
+
+例如，假设我想计算一个列表中每个数字的平方。这里，我用一个简单的 \texttt{for} 循环来实现：
+
+\begin{codebox}[python]
+a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+squares = []
+for x in a:
+    squares.append(x**2)
+print(squares)
+>>>
+[1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+\end{codebox}
+
+借助列表推导式，我只需一行就能得到相同结果：指定计算所用的表达式，以及要遍历的输入序列变量：
+
+\begin{codebox}[python]
+squares = [x**2 for x in a]  # 列表推导式
+print(squares)
+>>>
+[1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+\end{codebox}
+
+除非只是应用单参数函数，否则在简单场景下，列表推导式比 \texttt{map} 内置函数更清晰。\texttt{map} 需要为计算创建一个 \texttt{lambda} 函数（参见 Item 39（``优先使用 \texttt{functools.partial} 而非 \texttt{lambda} 表达式作为粘合函数''）），相比之下视觉上更杂乱：
+
+\begin{codebox}[python]
+alt = map(lambda x: x**2, a)
+\end{codebox}
+
+与 \texttt{map} 不同，列表推导式可以轻松地从输入列表中筛选项目，从而把对应的输出从结果中去掉。例如，假设我想计算能被 2 整除的数字的平方。这里，我通过在循环之后给列表推导式加上一个 \texttt{if} 子句来实现：
+
+\begin{codebox}[python]
+even_squares = [x**2 for x in a if x % 2 == 0]
+print(even_squares)
+>>>
+[4, 16, 36, 64, 100]
+\end{codebox}
+
+\texttt{filter} 内置函数可以和 \texttt{map} 搭配使用来得到相同结果，但由于嵌套和样板代码，可读性差得多：
+
+\begin{codebox}[python]
+alt = map(lambda x: x**2, filter(lambda x: x % 2 == 0, a))
+assert even_squares == list(alt)
+\end{codebox}
+
+字典和集合也各自有等同于列表推导式的形式（分别称为字典推导式（dictionary comprehension）和集合推导式（set comprehension））。在编写算法时，这些形式可以轻松创建其他类型的派生数据结构：
+
+\begin{codebox}[python]
+even_squares_dict = {x: x**2 for x in a if x % 2 == 0}
+threes_cubed_set = {x**3 for x in a if x % 3 == 0}
+print(even_squares_dict)
+print(threes_cubed_set)
+>>>
+{2: 4, 4: 16, 6: 36, 8: 64, 10: 100}
+{216, 729, 27}
+\end{codebox}
+
+如果给每次调用套上相应的构造器，用 \texttt{map} 和 \texttt{filter} 也能得到相同结果。但这些语句会变得很长，以至于你不得不拆成多行，这样更杂乱，应该避免：
+
+\begin{codebox}[python]
+alt_dict = dict(
+    map(
+        lambda x: (x, x**2),
+        filter(lambda x: x % 2 == 0, a),
+    )
+)
+alt_set = set(
+    map(
+        lambda x: x**3,
+        filter(lambda x: x % 3 == 0, a),
+    )
+)
+\end{codebox}
+
+不过，\texttt{map} 和 \texttt{filter} 内置函数有一个好处：它们返回迭代器（iterator），能够每次增量地产出一个结果。这使得这些函数可以高效地组合在一起，并且内存占用很小（背景知识参见 Item 43（``考虑用生成器（generator）替代返回列表''）和 Item 24（``考虑用 \texttt{itertools} 处理迭代器和生成器''））。相比之下，列表推导式在求值时会把整个结果实体化（materialize），从而消耗多得多的内存。幸运的是，Python 还提供了一种与列表推导式非常相似的语法，可以创建无限长且省内存的值流（参见 Item 44（``针对大型列表推导式考虑使用生成器表达式''））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 列表推导式比 \texttt{map} 和 \texttt{filter} 内置函数更清晰，因为它们不需要 \texttt{lambda} 表达式。
+\item 列表推导式允许你通过 \texttt{if} 子句轻松跳过输入列表中的项，而这种行为 \texttt{map} 在没有 \texttt{filter} 帮助时无法支持。
+\item 字典和集合也可以用推导式创建。
+\item 列表推导式在求值时实体化完整结果，与逐次增量产出每个输出的迭代器相比，可能占用相当多的内存。
+\end{itemize}
+
+\section{Item 41: 推导式中控制子表达式不要超过两个}
+
+除了基本用法（参见 Item 40（``用推导式替代 \texttt{map} 和 \texttt{filter}''）），推导式还支持多层循环。
+
+例如，假设我想把一个矩阵（matrix，即包含其他列表实例的列表）简化成包含所有项的一个扁平列表。这里，我用一个列表推导式并通过加入两个 \texttt{for} 子表达式来实现。这些子表达式按照从左到右的顺序执行：
+
+\begin{codebox}[python]
+matrix = [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9],
+]
+flat = [x for row in matrix for x in row]
+print(flat)
+>>>
+[1, 2, 3, 4, 5, 6, 7, 8, 9]
+\end{codebox}
+
+这个例子简单、可读，是推导式中使用多重循环的一种合理用法。另一种合理的多重循环用法是复制输入列表的两层嵌套结构。例如，假设我想对二维矩阵中每个单元格的值求平方。这个推导式因为多了 \texttt{[]} 字符而显得更杂乱，但仍然相对易读：
+
+\begin{codebox}[python]
+squared = [[x**2 for x in row] for row in matrix]
+print(squared)
+>>>
+[[1, 4, 9], [16, 25, 36], [49, 64, 81]]
+\end{codebox}
+
+如果这个推导式再包含一个循环，就会变得很长，以至于我不得不把它拆成多行：
+
+\begin{codebox}[python]
+my_lists = [
+    [[1, 2, 3], [4, 5, 6]],
+    ...
+]
+flat = [x for sublist1 in my_lists
+        for sublist2 in sublist1
+        for x in sublist2]
+\end{codebox}
+
+到了这一步，多行推导式并不比替代写法短多少。这里，我使用普通的循环语句得到了相同结果。这种写法的缩进比上面的三层列表推导式更清晰地展现了循环结构：
+
+\begin{codebox}[python]
+flat = []
+for sublist1 in my_lists:
+    for sublist2 in sublist1:
+        flat.extend(sublist2)
+\end{codebox}
+
+推导式支持多个 \texttt{if} 条件。同一循环层级的多个条件之间隐含着 \texttt{and} 表达式。例如，假设我想筛选一个数字列表，只保留大于 4 的偶数。下面这两个列表推导式是等价的：
+
+\begin{codebox}[python]
+a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+b = [x for x in a if x > 4 if x % 2 == 0]
+c = [x for x in a if x > 4 and x % 2 == 0]
+\end{codebox}
+
+条件可以写在每个循环层级的 \texttt{for} 子表达式之后。例如，假设我想筛选一个矩阵，只保留那些所在行之和大于等于 10、且能被 4 整除的单元格。用列表推导式表达这一点并不需要很多代码，但极其难读：
+
+\begin{codebox}[python]
+matrix = [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9],
+]
+filtered = [[x for x in row if x % 4 == 0]
+            for row in matrix if sum(row) >= 10]
+print(filtered)
+>>>
+[[4], [8]]
+\end{codebox}
+
+虽然这个例子有点绕，但在实践中你会遇到一些场景，看起来用这种推导式很合适。但我强烈建议你避免使用像这样的列表、字典或集合推导式。由此产生的代码对新读者来说非常难理解。尤其是字典推导式，产生混淆的可能性更大，因为它本来就需要一个额外的参数来同时表示每一项的键和值。
+
+经验法则是：推导式中控制子表达式不要超过两个。可以是两个条件、两个循环，或者一个条件加一个循环。一旦比这更复杂，你就应该使用普通的 \texttt{if} 和 \texttt{for} 语句，并编写一个辅助函数（参见 Item 43（``考虑用生成器（generator）替代返回列表''））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 推导式支持多层循环，以及每个循环层级的多个条件。
+\item 含有超过两个控制子表达式的推导式非常难读，应当避免。
+\end{itemize}
+
+\section{Item 42: 用赋值表达式减少推导式中的重复}
+
+推导式（包括列表、字典和集合三种形式）的一个常见模式是：需要在多个地方引用同一个计算。
+
+例如，假设我在编写一个程序来管理一家紧固件公司的订单。当客户发来新订单时，我需要能够告诉他们我能否满足这些订单。具体来说，假设我需要确认某个请求有足够的库存，并且高于发货的最低阈值（例如，按每批 8 个计算），如下所示：
+
+\begin{codebox}[python]
+stock = {
+    "nails": 125,
+    "screws": 35,
+    "wingnuts": 8,
+    "washers": 24,
+}
+order = ["screws", "wingnuts", "clips"]
+def get_batches(count, size):
+    return count // size
+result = {}
+for name in order:
+    count = stock.get(name, 0)
+    batches = get_batches(count, 8)
+    if batches:
+        result[name] = batches
+print(result)
+>>>
+{'screws': 4, 'wingnuts': 1}
+\end{codebox}
+
+这里，我用字典推导式（dictionary comprehension）更简洁地实现了这个循环逻辑（最佳实践参见 Item 40（``用推导式替代 \texttt{map} 和 \texttt{filter}''））：
+
+\begin{codebox}[python]
+found = {name: get_batches(stock.get(name, 0), 8)
+         for name in order
+         if get_batches(stock.get(name, 0), 8)}
+print(found)
+>>>
+{'screws': 4, 'wingnuts': 1}
+\end{codebox}
+
+尽管这段代码更紧凑，但问题在于 \texttt{get\_batches(stock.get(name, 0), 8)} 表达式被重复了。这增加了视觉噪声，损害了可读性，而且在技术上是多余的。如果这两个表达式没有保持同步，这种重复还会增加引入 bug 的可能性。例如，这里我把第一个 \texttt{get\_batches} 调用的第二个参数从 \texttt{8} 改成了 \texttt{4}，导致结果变得不同：
+
+\begin{codebox}[python]
+has_bug = {name: get_batches(stock.get(name, 0), 4)  # 错误
+           for name in order
+           if get_batches(stock.get(name, 0), 8)}
+print("Expected:", found)
+print("Found:   ", has_bug)
+>>>
+Expected: {'screws': 4, 'wingnuts': 1}
+Found:    {'screws': 8, 'wingnuts': 2}
+\end{codebox}
+
+这些问题的简单解决办法是，把赋值表达式（assignment expression，常被称为海象运算符（walrus operator））作为推导式的一部分来使用（背景知识参见 Item 8（``用赋值表达式避免重复''））：
+
+\begin{codebox}[python]
+found = {name: batches for name in order
+         if (batches := get_batches(stock.get(name, 0), 8))}
+\end{codebox}
+
+这个赋值表达式（\texttt{batches := get\_batches(...)}）让我能够为每个 \texttt{order} 键在 \texttt{stock} 字典中只查找一次值，只调用一次 \texttt{get\_batches}，然后把它对应的值存入 \texttt{batches} 变量。随后我可以在推导式的其他地方引用该变量来构造字典的内容，而不必第二次调用 \texttt{get\_batches}。消除对 \texttt{get} 和 \texttt{get\_batches} 的冗余调用，还可以通过避免对 \texttt{order} 中每一项进行不必要的计算来提升性能。
+
+在推导式的值表达式中定义赋值表达式是合法的语法。但如果你试图在推导式的其他部分引用它所定义的变量（\texttt{tenth}），由于推导式的求值顺序，你可能会在运行时遇到异常：
+
+\begin{codebox}[python]
+result = {name: (tenth := count // 10)
+          for name, count in stock.items() if tenth > 0}
+>>>
+Traceback ...
+NameError: name 'tenth' is not defined
+\end{codebox}
+
+你可以通过把赋值表达式移入条件，然后在推导式的值表达式中引用它所定义的变量名（\texttt{tenth}）来修复这个例子：
+
+\begin{codebox}[python]
+result = {name: tenth for name, count in stock.items()
+          if (tenth := count // 10) > 0}
+print(result)
+>>>
+{'nails': 12, 'screws': 3, 'washers': 2}
+\end{codebox}
+
+当推导式使用海象运算符时，任何对应的变量名都会泄漏（leak）到外层作用域（scope）中（背景知识参见 Item 33（``了解闭包（closure）如何与变量作用域和 \texttt{nonlocal} 交互''））：
+
+\begin{codebox}[python]
+half = [(squared := last**2)
+        for count in stock.values()
+        if (last := count // 2) > 10]
+print(f"Last item of {half} is {last} ** 2 = {squared}")
+>>>
+Last item of [3844, 289, 144] is 12 ** 2 = 144
+\end{codebox}
+
+这些变量名的泄漏，与普通的 \texttt{for} 循环所发生的情况类似：
+
+\begin{codebox}[python]
+for count in stock.values():
+    last = count // 2
+    squared = last**2
+print(f"{count} // 2 = {last}; {last} ** 2 = {squared}")
+>>>
+24 // 2 = 12; 12 ** 2 = 144
+\end{codebox}
+
+然而，这种泄漏行为可能令人意外，因为当推导式不使用赋值表达式时，循环变量名并不会像那样泄漏（更多背景参见 Item 20（``绝不要在循环结束后使用 \texttt{for} 循环变量''）和 Item 84（``当心异常变量消失''））：
+
+\begin{codebox}[python]
+half = [count // 2 for count in stock.values()]
+print(half)   # 可行
+print(count)  # 异常，因为循环变量没有泄漏
+>>>
+[62, 17, 4, 12]
+Traceback ...
+NameError: name 'count' is not defined
+\end{codebox}
+
+使用赋值表达式在生成器表达式（generator expression）中的工作方式也一样（参见 Item 44（``针对大型列表推导式考虑使用生成器表达式''））。这里，我创建了一个由「项名和当前库存数量」组成的配对迭代器，而不是 \texttt{dict} 实例：
+
+\begin{codebox}[python]
+found = ((name, batches) for name in order
+         if (batches := get_batches(stock.get(name, 0), 8)))
+print(next(found))
+print(next(found))
+>>>
+('screws', 4)
+('wingnuts', 1)
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 赋值表达式让推导式和生成器表达式能够在同一推导式的其他地方复用某个条件中得出的值，从而提升可读性和性能。
+\item 尽管可以在推导式或生成器表达式的条件之外使用赋值表达式，但你应该避免这样做，因为它并不可靠。
+\item 在推导式中，来自赋值表达式的变量会泄漏到外层作用域；相比之下，推导式的循环变量不会泄漏。
+\end{itemize}
+
+\section{Item 43: 考虑使用生成器而非返回列表}
+
+对于一个产生一系列结果的函数来说，最简单的选择就是返回一个列表（list）。例如，假设我想找出一个字符串中每个单词的索引（index）。这里，我通过调用 \texttt{append} 方法把结果累积到一个列表中，并在函数末尾把它返回：
+
+\begin{codebox}[python]
+def index_words(text):
+    result = []
+    if text:
+        result.append(0)
+    for index, letter in enumerate(text):
+        if letter == " ":
+            result.append(index + 1)
+    return result
+\end{codebox}
+
+对一段示例输入，它能按预期工作：
+
+\begin{codebox}[python]
+address = "Four score and seven years ago..."
+result = index_words(address)
+print(result[:10])
+>>>
+[0, 5, 11, 15, 21, 27, 31, 35, 43, 51]
+\end{codebox}
+
+上面的 \texttt{index\_words} 函数存在两个问题。第一个问题是，这段代码有点稠密且啰嗦。每当找到一个新结果时，我都要调用 \texttt{append} 方法。方法调用本身（\texttt{result.append}）弱化了真正要加入 \texttt{list} 的值（\texttt{index + 1}）。创建结果列表需要单独一行，返回它又需要另一行。尽管函数体大约包含 130 个字符（不计空白），但其中只有大约 75 个字符是真正重要的。
+
+编写这个函数更好的方式是使用生成器（generator），即利用 \texttt{yield} 表达式逐步产出输出的函数。这里，我定义了该函数的一个生成器版本，它能产生与之前相同的结果：
+
+\begin{codebox}[python]
+def index_words_iter(text):
+    if text:
+        yield 0
+    for index, letter in enumerate(text):
+        if letter == " ":
+            yield index + 1
+\end{codebox}
+
+调用生成器函数时，它实际上并不会运行，而是立即返回一个迭代器（iterator）。每调用一次内置（built-in）函数 \texttt{next}，迭代器就把生成器推进到下一个 \texttt{yield} 表达式。生成器传给 \texttt{yield} 的每个值，都会由迭代器返回给 \texttt{next} 的调用者：
+
+\begin{codebox}[python]
+it = index_words_iter(address)
+print(next(it))
+print(next(it))
+>>>
+0
+5
+\end{codebox}
+
+\texttt{index\_words\_iter} 函数读起来明显更轻松，因为所有与结果列表的交互都被消除了。结果改为传给 \texttt{yield} 表达式。如有必要，我可以把生成器返回的迭代器传给 \texttt{list} 内置函数，轻松地将其转换为列表（参见 Item 44「考虑对大型列表推导式使用生成器表达式」了解其工作原理）：
+
+\begin{codebox}[python]
+result = list(index_words_iter(address))
+print(result[:10])
+>>>
+[0, 5, 11, 15, 21, 27, 31, 35, 43, 51]
+\end{codebox}
+
+\texttt{index\_words} 的第二个问题是，它要求把所有结果都存入列表之后才能返回。对于超大的输入，这可能会让程序耗尽内存并崩溃。
+
+相比之下，由于内存需求是有界的，这个函数的生成器版本可以轻松适配任意长度的输入。例如，这里我定义了一个生成器，它每次从文件中读取一行并流式处理输入，每次产出一个单词：
+
+\begin{codebox}[python]
+def index_file(handle):
+    offset = 0
+    for line in handle:
+        if line:
+            yield offset
+        for letter in line:
+            offset += 1
+            if letter == " ":
+                yield offset
+\end{codebox}
+
+这个函数的工作内存被限制为单行输入的最大长度，而不是整个输入文件的内容。
+
+这里，我演示在文件输入上运行该生成器会产生相同的结果（关于 \texttt{islice} 函数，参见 Item 24「考虑用 \texttt{itertools} 处理迭代器和生成器」）：
+
+\begin{codebox}[python]
+with open("address.txt", "r") as f:
+    it = index_file(f)
+    results = itertools.islice(it, 0, 10)
+    print(list(results))
+>>>
+[0, 5, 11, 15, 21, 27, 31, 35, 43, 51]
+\end{codebox}
+
+像这样定义生成器唯一需要注意的地方是，调用者必须意识到返回的迭代器是有状态的（stateful），无法重复使用（参见 Item 21「迭代参数时保持防御性」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 使用生成器往往比让函数返回累积结果的列表更清晰。
+\item 生成器返回的迭代器会产出生成器函数体内传给 \texttt{yield} 表达式的那一组值。
+\item 生成器可以为任意大的输入产出一系列输出，因为其工作内存并不包含此前所有输入与输出的实体化（materialization）结果。
+\end{itemize}
+
+\section{Item 44: 考虑对大型列表推导式使用生成器表达式}
+
+列表推导式（list comprehension）存在一个问题（参见 Item 40「用推导式替代 \texttt{map} 和 \texttt{filter}」）：它们会创建新的列表实例，其中可能包含输入序列中每个值对应的一项。对于小输入这没问题，但对于大输入，这种行为可能会消耗大量内存并导致程序崩溃。
+
+例如，假设我想读取一个文件，并返回每一行上的字符数。这里，我使用列表推导式来实现这一逻辑：
+
+\begin{codebox}[python]
+value = [len(x) for x in open("my_file.txt")]
+print(value)
+>>>
+[100, 57, 15, 1, 12, 75, 5, 86, 89, 11]
+\end{codebox}
+
+这段代码要求把文件中每一行的长度都保存在内存中。如果文件极其庞大，或者是一个永不结束的网络套接字（socket），它就无能为力了。为了解决这个问题，Python 提供了生成器表达式（generator expression），它建立在列表推导式的语法和生成器的行为之上。生成器表达式在运行时不会把整个输出序列实体化。相反，生成器表达式求值后得到的是一个迭代器，它会从该表达式每次产出一个项。
+
+要创建生成器表达式，只需把类似列表推导式的语法放在 \texttt{()} 字符之间。这里，我使用一个与上述代码等价的生成器表达式。不过，生成器表达式会立即求值成一个迭代器，不会向前推进任何进度，而且内存开销很小：
+
+\begin{codebox}[python]
+it = (len(x) for x in open("my_file.txt"))
+print(it)
+>>>
+<generator object <genexpr> at 0x104f37510>
+\end{codebox}
+
+返回的迭代器可以按需一次前进一步，以产生生成器表达式的下一个输出（使用内置函数 \texttt{next}）。我可以随意消费这个生成器表达式，而不必担心内存用量爆炸：
+
+\begin{codebox}[python]
+print(next(it))
+print(next(it))
+>>>
+100
+57
+\end{codebox}
+
+生成器表达式另一个强大的结果是，它们可以相互组合。这里，我取上面生成器表达式返回的迭代器，把它用作另一个生成器表达式的输入：
+
+\begin{codebox}[python]
+roots = ((x, x**0.5) for x in it)
+\end{codebox}
+
+每当我推进这个迭代器时，它也会推进内部的迭代器，从而产生一种多米诺效应：循环、求值表达式、传递输入与输出，而且全过程都尽可能节省内存：
+
+\begin{codebox}[python]
+print(next(roots))
+>>>
+(15, 3.872983346207417)
+\end{codebox}
+
+像这样把生成器串联起来的代码在 Python 中执行得非常快。当你想寻找一种方法来组合处理大型输入流的功能时，生成器表达式是最佳工具（更多示例参见 Item 23「将迭代器传给 \texttt{any} 和 \texttt{all} 以实现高效的短路逻辑」以及 Item 24「考虑用 \texttt{itertools} 处理迭代器和生成器」）。唯一需要注意的是，生成器表达式返回的迭代器是有状态的（stateful），因此你务必小心，不要把这样的迭代器使用超过一次（参见 Item 21「迭代参数时保持防御性」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 列表推导式可能会因占用过多内存，而对大输入造成问题。
+\item 生成器表达式以迭代器的形式每次产出一个输出，从而避免了内存问题。
+\item 生成器表达式可以通过将某个生成器表达式的迭代器传入另一个生成器表达式的 \texttt{for} 子表达式来进行组合。
+\item 生成器表达式在串联在一起时执行得非常快，而且内存高效。
+\end{itemize}
+
+\section{Item 45: 使用 yield from 组合多个生成器}
+
+生成器带来了各种各样的好处（参见 Item 43「考虑使用生成器而非返回列表」），也为常见问题提供了解决方案（参见 Item 21「迭代参数时保持防御性」）。生成器如此有用，以至于许多程序开始看起来像是层层串联的生成器。
+
+例如，假设我有一个图形程序，它使用生成器来为屏幕上图像的移动制作动画（animate）。为了获得我想要的视觉效果，我需要图像一开始快速移动，暂时停顿，然后以更慢的速度继续移动。这里，我定义了两个生成器，它们为这段动画的每一部分产出所期望的屏幕增量（delta）：
+
+\begin{codebox}[python]
+def move(period, speed):
+    for _ in range(period):
+        yield speed
+def pause(delay):
+    for _ in range(delay):
+        yield 0
+\end{codebox}
+
+为了创建最终的动画，我需要把 \texttt{move} 和 \texttt{pause} 组合在一起，以产生单一的屏幕增量序列。这里，我通过为动画的每一步调用一个生成器、依次迭代每个生成器，然后按顺序从它们全部产出增量来实现：
+
+\begin{codebox}[python]
+def animate():
+    for delta in move(4, 5.0):
+        yield delta
+    for delta in pause(3):
+        yield delta
+    for delta in move(2, 3.0):
+        yield delta
+\end{codebox}
+
+现在，当这些增量由单一的 \texttt{animation} 生成器产出时，我可以把它们渲染到屏幕上：
+
+\begin{codebox}[python]
+def render(delta):
+    print(f"Delta: {delta:.1f}")
+    # 在屏幕上移动图像
+    ...
+def run(func):
+    for delta in func():
+        render(delta)
+run(animate)
+>>>
+Delta: 5.0
+Delta: 5.0
+Delta: 5.0
+Delta: 5.0
+Delta: 0.0
+Delta: 0.0
+Delta: 0.0
+Delta: 3.0
+Delta: 3.0
+\end{codebox}
+
+这段代码的问题在于 \texttt{animate} 函数的重复性质。为每个生成器编写的 \texttt{for} 语句和 \texttt{yield} 表达式的冗余增加了噪声，降低了可读性。这个例子只包含三个嵌套的生成器，却已经损害了清晰度；而一段包含十几个乃至更多阶段的复杂动画，将极其难以理解。
+
+这个问题的解决办法是使用 \texttt{yield from} 表达式。这一高级生成器特性允许你在把控制权交还给父生成器之前，从一个嵌套的生成器中产出所有值。
+
+这里，我使用 \texttt{yield from} 重新实现 \texttt{animation} 函数：
+
+\begin{codebox}[python]
+def animate_composed():
+    yield from move(4, 5.0)
+    yield from pause(3)
+    yield from move(2, 3.0)
+run(animate_composed)
+>>>
+Delta: 5.0
+Delta: 5.0
+Delta: 5.0
+Delta: 5.0
+Delta: 0.0
+Delta: 0.0
+Delta: 0.0
+Delta: 3.0
+Delta: 3.0
+\end{codebox}
+
+结果与之前相同，但现在代码更清晰、更直观。\texttt{yield from} 本质上是让 Python 解释器替你完成嵌套的 \texttt{for} 循环和 \texttt{yield} 表达式，因此执行也略微更快。如果你发现自己正在组合生成器，我强烈建议你在可能的情况下使用 \texttt{yield from}。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{yield from} 表达式允许你把多个嵌套的生成器组合成一个单一的合并生成器。
+\item \texttt{yield from} 消除了手动迭代嵌套生成器并产出其输出所需的样板代码（boilerplate）。
+\end{itemize}
+
+\section{Item 46: 把迭代器作为参数传入生成器，而非调用 send 方法}
+
+\texttt{yield} 表达式（expression）为生成器函数提供了一种简单的方式，用来产出一系列可迭代对象（iterable）形式的输出值（参见 Item 43「考虑用生成器（generator）替代返回列表」）。然而，这条通道看起来是单向的：在生成器运行的同时，并没有显而易见的办法可以同时把数据流入和流出生成器。在很多场景下，拥有这样一种双向通信能力会很有价值。
+
+例如，假设我正在编写一个用软件定义无线电（software-defined radio）来传输信号的程序。这里，我用一个函数来生成具有给定点数的正弦波（sine wave）的近似值：
+
+\begin{codebox}[python]
+import math
+def wave(amplitude, steps):
+    step_size = 2 * math.pi / steps
+    for step in range(steps):
+        radians = step * step_size
+        fraction = math.sin(radians)
+        output = amplitude * fraction
+        yield output
+\end{codebox}
+
+现在，我可以遍历 \texttt{wave} 生成器，以单一指定的幅度来传输这个波信号：
+
+\begin{codebox}[python]
+def transmit(output):
+    if output is None:
+        print(f"Output is None")
+    else:
+        print(f"Output: {output:>5.1f}")
+def run(it):
+    for output in it:
+        transmit(output)
+run(wave(3.0, 8))
+>>>
+Output:   0.0
+Output:   2.1
+Output:   3.0
+Output:   2.1
+Output:   0.0
+Output:  -2.1
+Output:  -3.0
+Output:  -2.1
+\end{codebox}
+
+这对于产生基本的波形没问题，但它无法基于一个独立的输入来持续改变波的幅度（也就是说，广播调幅（AM）无线电信号时就需要这样做）。我需要一种办法，在生成器的每次迭代时都对幅度进行调制。
+
+Python 生成器支持 \texttt{send} 方法，它能把 \texttt{yield} 表达式升级成一个双向通道。 \texttt{send} 方法可以在生成器产出输出的同时，向它提供流式的输入。通常，在遍历一个生成器时，\texttt{yield} 表达式的值是 \texttt{None}：
+
+\begin{codebox}[python]
+def my_generator():
+    received = yield 1
+    print(f"{received=}")
+it = my_generator()
+output = next(it)  # 获取生成器的第一个输出
+print(f"{output=}")
+try:
+    next(it)       # 运行生成器直到退出
+except StopIteration:
+    pass
+>>>
+output=1
+received=None
+\end{codebox}
+
+当我调用 \texttt{send} 方法，而不是用 \texttt{for} 循环或 \texttt{next} 内置函数来遍历生成器时，所传入的参数会在生成器被恢复时成为 \texttt{yield} 表达式的值。不过，当生成器刚启动时，\texttt{yield} 表达式还没有遇到过，所以最初调用 \texttt{send} 时唯一合法的值是 \texttt{None}。（任何其他参数都会在运行时引发异常。）
+
+这里，我运行与上面相同的生成器，但改用 \texttt{send} 而不是 \texttt{next} 来推进它们：
+
+\begin{codebox}[python]
+it = my_generator()
+output = it.send(None)  # 获取生成器的第一个输出
+print(f"{output=}")
+try:
+    it.send("hello!")   # 向生成器发送一个值
+except StopIteration:
+    pass
+>>>
+output=1
+received='hello!'
+\end{codebox}
+
+我可以利用这一特性，根据一个输入信号来调制正弦波的幅度。首先，我需要修改 \texttt{wave} 生成器，让它保存 \texttt{yield} 表达式返回的 \texttt{amplitude}，并用它来计算下一个产出的输出：
+
+\begin{codebox}[python]
+def wave_modulating(steps):
+    step_size = 2 * math.pi / steps
+    amplitude = yield              # 接收初始幅度
+    for step in range(steps):
+        radians = step * step_size
+        fraction = math.sin(radians)
+        output = amplitude * fraction
+        amplitude = yield output   # 接收下一个幅度
+\end{codebox}
+
+接下来，我需要更新 \texttt{run} 函数，在每次迭代时把调制用的幅度流入 \texttt{wave\_modulating} 生成器。传给 \texttt{send} 的第一个输入必须是 \texttt{None}，因为此时生成器内部还没有遇到过 \texttt{yield} 表达式：
+
+\begin{codebox}[python]
+def run_modulating(it):
+    amplitudes = [None, 7, 7, 7, 2, 2, 2, 2, 10, 10, 10, 10, 10]
+    for amplitude in amplitudes:
+        output = it.send(amplitude)
+        transmit(output)
+run_modulating(wave_modulating(12))
+>>>
+Output is None
+Output:   0.0
+Output:   3.5
+Output:   6.1
+Output:   2.0
+Output:   1.7
+Output:   1.0
+Output:   0.0
+Output:  -5.0
+Output:  -8.7
+Output: -10.0
+Output:  -8.7
+Output:  -5.0
+\end{codebox}
+
+这能工作；它会根据输入信号正确地改变输出幅度。第一个输出是 \texttt{None}，正如预期，因为生成器在初始的 \texttt{yield} 表达式之前还没有接收到 \texttt{amplitude} 的值。
+
+这段代码的一个问题是，新读者很难理解：在赋值语句右侧使用 \texttt{yield} 并不直观，而且如果不预先了解这个高级生成器特性的细节，就很难看清 \texttt{yield} 与 \texttt{send} 之间的联系。
+
+现在，设想程序的复杂度变得更高。我不再用简单的正弦波作为载波，而是需要用一个由多个信号依次组成的复杂波形。实现这种行为的一种办法，是用 \texttt{yield from} 表达式把多个生成器组合在一起（参见 Item 45「用 \texttt{yield from} 组合多个生成器」）。这里，我确认在幅度固定的简单情况下它能如期工作：
+
+\begin{codebox}[python]
+def complex_wave():
+    yield from wave(7.0, 3)
+    yield from wave(2.0, 4)
+    yield from wave(10.0, 5)
+run(complex_wave())
+>>>
+Output:   0.0
+Output:   6.1
+Output:  -6.1
+Output:   0.0
+Output:   2.0
+Output:   0.0
+Output:  -2.0
+Output:   0.0
+Output:   9.5
+Output:   5.9
+Output:  -5.9
+Output:  -9.5
+\end{codebox}
+
+既然 \texttt{yield from} 表达式能处理简单的情况，你大概会期望它也能和生成器的 \texttt{send} 方法正常配合。这里，我尝试用 \texttt{yield from} 来组合多次对 \texttt{wave\_modulating} 生成器（它使用了 \texttt{send}）的调用：
+
+\begin{codebox}[python]
+def complex_wave_modulating():
+    yield from wave_modulating(3)
+    yield from wave_modulating(4)
+    yield from wave_modulating(5)
+run_modulating(complex_wave_modulating())
+>>>
+Output is None
+Output:   0.0
+Output:   6.1
+Output:  -6.1
+Output is None
+Output:   0.0
+Output:   2.0
+Output:   0.0
+Output: -10.0
+Output is None
+Output:   0.0
+Output:   9.5
+Output:   5.9
+\end{codebox}
+
+这在一定程度上能工作，但结果里藏着一个大惊喜：输出中出现了很多 \texttt{None} 值！为什么会这样？当每个 \texttt{yield from} 表达式遍历完一个嵌套的生成器后，它会转到下一个。每个嵌套生成器都以一个不带值的裸 \texttt{yield} 表达式开头，以便从生成器的 \texttt{send} 方法调用中接收初始幅度。这就导致父生成器在子生成器之间切换时，会输出一个 \texttt{None} 值。
+
+这意味着，如果你试图把 \texttt{yield from} 和 \texttt{send} 这两个特性一起使用，你关于它们各自行为的假设就会被打破。虽然可以通过增加 \texttt{run\_modulating} 函数的复杂度来绕过这个 \texttt{None} 问题，但这并不值得。新读者本来就难以理解 \texttt{send} 的工作方式。而 \texttt{yield from} 这个令人意外的陷阱更是雪上加霜。我的建议是完全避开 \texttt{send} 方法，改用一种更简单的做法。
+
+最简单的解决办法是把一个迭代器（iterator）传入 \texttt{wave} 函数。这个迭代器应该在每次被调用内置函数 \texttt{next} 时，返回一个输入幅度。这种安排保证了每个生成器会随着输入和输出的处理而像瀑布一样依次推进（更多示例可参见 Item 44「对大型列表推导式（comprehension）考虑使用生成器表达式」以及 Item 23「把迭代器传给 \texttt{any} 和 \texttt{all} 以实现高效短路逻辑」）：
+
+\begin{codebox}[python]
+def wave_cascading(amplitude_it, steps):
+    step_size = 2 * math.pi / steps
+    for step in range(steps):
+        radians = step * step_size
+        fraction = math.sin(radians)
+        amplitude = next(amplitude_it)  # 获取下一个输入
+        output = amplitude * fraction
+        yield output
+\end{codebox}
+
+我可以把同一个迭代器传入每个想要用 \texttt{yield from} 组合在一起的生成器函数。迭代器是有状态的，因此每个嵌套生成器都会从上一个生成器中断的地方继续（背景知识可参见 Item 21「遍历参数时要有防御性思维」）：
+
+\begin{codebox}[python]
+def complex_wave_cascading(amplitude_it):
+    yield from wave_cascading(amplitude_it, 3)
+    yield from wave_cascading(amplitude_it, 4)
+    yield from wave_cascading(amplitude_it, 5)
+\end{codebox}
+
+现在，我只要从 \texttt{amplitudes} \texttt{list} 传入一个迭代器，就能运行这个组合起来的生成器：
+
+\begin{codebox}[python]
+def run_cascading():
+    amplitudes = [7, 7, 7, 2, 2, 2, 2, 10, 10, 10, 10, 10]
+    it = complex_wave_cascading(iter(amplitudes))  # 迭代器
+    for amplitude in amplitudes:
+        output = next(it)
+        transmit(output)
+run_cascading()
+>>>
+Output:   0.0
+Output:   6.1
+Output:  -6.1
+Output:   0.0
+Output:   2.0
+Output:   0.0
+Output:  -2.0
+Output:   0.0
+Output:   9.5
+Output:   5.9
+Output:  -5.9
+Output:  -9.5
+\end{codebox}
+
+这种做法最妙的一点是，输入迭代器可以来自任何地方，并且可以是完全动态的（例如，用生成器函数实现，或者由多个生成器组合而成；参见 Item 24「考虑用 \texttt{itertools} 处理迭代器和生成器」）。唯一的缺点是，这段代码假设输入生成器是线程安全的，而事实未必如此。如果你需要跨越线程边界，那么 \texttt{async} 函数或许是更好的选择（参见 Item 77「混合线程与协程，以平滑地过渡到 \texttt{asyncio}」）。
+
+\subsection{需要记住的要点}
+\begin{itemize}
+\item \texttt{send} 方法可用于向生成器注入数据——它会给 \texttt{yield} 表达式赋一个值，这个值可以被赋给某个变量。
+\item 将 \texttt{send} 与 \texttt{yield from} 表达式一起使用，可能会导致令人意外的行为，例如在生成器输出中不合时宜地出现 \texttt{None} 值。
+\item 向一组组合起来的生成器提供一个输入迭代器，比使用 \texttt{send} 方法更好，而 \texttt{send} 方法应当避免使用。
+\end{itemize}
+
+\section{Item 47: 用类而非生成器的 \texttt{throw} 方法管理迭代状态转换}
+
+除了 \texttt{yield from} 表达式（参见 Item 45（"用 yield from 组合多个生成器"））和 \texttt{send} 方法（参见 Item 46（"将迭代器作为参数传入生成器，而非调用 send 方法"））之外，生成器（generator）还有一个进阶特性：\texttt{throw} 方法，它可以在生成器函数内部重新抛出 \texttt{Exception} 实例。\texttt{throw} 的工作方式很简单：调用该方法后，生成器内部下一次执行的 \texttt{yield} 表达式在收到其输出后，会重新抛出所传入的 \texttt{Exception} 实例，而不是照常继续执行。下面用一个简单的例子演示这一行为：
+
+\begin{codebox}[python]
+class MyError(Exception):
+    pass
+def my_generator():
+    yield 1
+    yield 2
+    yield 3
+it = my_generator()
+print(next(it))                         # 产出 1
+print(next(it))                         # 产出 2
+print(it.throw(MyError("test error")))  # 抛出异常
+>>>
+1
+2
+Traceback ...
+MyError: test error
+\end{codebox}
+
+调用 \texttt{throw} 时，生成器函数可以用包裹最后一次执行的 \texttt{yield} 表达式的标准 \texttt{try}/\texttt{except} 复合语句（compound statement）来捕获注入的异常（有关异常处理的更多内容，参见 Item 80（"充分利用 try/except/else/finally 中的每个代码块"））：
+
+\begin{codebox}[python]
+def my_generator():
+    yield 1
+    try:
+        yield 2
+    except MyError:
+        print("Got MyError!")
+    else:
+        yield 3
+    yield 4
+it = my_generator()
+print(next(it))                         # 产出 1
+print(next(it))                         # 产出 2
+print(it.throw(MyError("test error")))  # 产出 4
+>>>
+1
+2
+Got MyError!
+4
+\end{codebox}
+
+这一功能在生成器与其调用者之间建立了一条双向通信通道，在某些场景下很有用。例如，假设我需要一个支持偶发性重置（reset）的计时器程序。下面我通过定义一个生成器来实现这一行为，该生成器依赖在 \texttt{yield} 表达式被求值时抛出 \texttt{Reset} 异常：
+
+\begin{codebox}[python]
+class Reset(Exception):
+    pass
+def timer(period):
+    current = period
+    while current:
+        try:
+            yield current
+        except Reset:
+            print("Resetting")
+            current = period
+        else:
+            current -= 1
+\end{codebox}
+
+每当用 \texttt{Reset} 异常对生成器调用 \texttt{throw} 方法时，计数器会在 \texttt{except} 代码块中重新启动。下面我定义一个驱动（driver）函数，它迭代 \texttt{timer} 生成器，在每一步报告进度，并注入可能由外部轮询（poll）输入（例如按钮）引发的重置事件：
+
+\begin{codebox}[python]
+def check_for_reset():
+    # 轮询外部事件
+    ...
+def announce(remaining):
+    print(f"{remaining} ticks remaining")
+def run():
+    it = timer(4)
+    while True:
+        try:
+            if check_for_reset():
+                current = it.throw(Reset())
+            else:
+                current = next(it)
+        except StopIteration:
+            break
+        else:
+            announce(current)
+run()
+>>>
+4 ticks remaining
+3 ticks remaining
+2 ticks remaining
+Resetting
+4 ticks remaining
+3 ticks remaining
+Resetting
+4 ticks remaining
+3 ticks remaining
+2 ticks remaining
+1 ticks remaining
+\end{codebox}
+
+这段代码能按预期工作，但可读性远不如应有的程度。为了捕获 \texttt{StopIteration} 异常或决定调用哪个函数，所需的各级嵌套让代码变得杂乱。
+
+实现这一功能更简单的方法是创建一个基础类来管理计时器的状态并启用状态转换（state transition）。下面我定义一个类，其中 \texttt{tick} 方法用于推进计时器，\texttt{reset} 方法用于重启时钟，还有一个 \texttt{\_\_bool\_\_} 双下方法（dunder）用于检查计时器是否已到期（有关背景，参见 Item 57（"为自定义容器类型继承 \texttt{collections.abc} 中的类"））：
+
+\begin{codebox}[python]
+class Timer:
+    def __init__(self, period):
+        self.current = period
+        self.period = period
+    def reset(self):
+        print("Resetting")
+        self.current = self.period
+    def tick(self):
+        before = self.current
+        self.current -= 1
+        return before
+    def __bool__(self):
+        return self.current > 0
+\end{codebox}
+
+现在，\texttt{run} 方法可以把 \texttt{Timer} 对象用作 \texttt{while} 语句中的测试表达式；由于嵌套层级减少，循环体内的代码更容易理解了：
+
+\begin{codebox}[python]
+def run():
+    timer = Timer(4)
+    while timer:
+        if check_for_reset():
+            timer.reset()
+        announce(timer.tick())
+run()
+>>>
+4 ticks remaining
+3 ticks remaining
+2 ticks remaining
+Resetting
+4 ticks remaining
+3 ticks remaining
+Resetting
+4 ticks remaining
+3 ticks remaining
+2 ticks remaining
+1 ticks remaining
+\end{codebox}
+
+这段输出与前面使用 \texttt{throw} 的版本一致，但这种实现方式更容易理解，对新接触代码的读者尤其如此。我建议完全避免使用 \texttt{throw}，如果需要这类「异常驱动」的行为，改用有状态的类（stateful class）（另一个理由参见 Item 89（"始终将资源传入生成器，并让调用者在外部清理"））。否则，如果你确实需要类生成器（generator-like）函数之间更高级的协作，不妨考虑 Python 的异步（asynchronous）特性（参见 Item 75（"用协程实现高并发 I/O"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{throw} 方法可用于在生成器内最近一次执行的 \texttt{yield} 表达式所在位置重新抛出异常。
+\item 使用 \texttt{throw} 会损害可读性，因为它需要额外的嵌套和样板（boilerplate）代码才能抛出并捕获异常。
+\item 更好的做法是简单地定义一个有状态的类，由它提供用于迭代和状态转换的方法。
+\end{itemize}

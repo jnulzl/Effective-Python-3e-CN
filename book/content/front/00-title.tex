@@ -1,0 +1,37 @@
+% =============================================================================
+%  标题页（Title Page）—— 仿原书配色重画
+% =============================================================================
+\thispagestyle{empty}
+
+\begin{tikzpicture}[remember picture, overlay]
+  \definecolor{covTop}{HTML}{1F3A5F}
+  \definecolor{covDark}{HTML}{16284A}
+  \definecolor{covBright}{HTML}{2E5E8C}
+  \definecolor{covAccent}{HTML}{4A90C2}
+
+  \fill[covDark] (current page.north west) rectangle (current page.south east);
+
+  \node[anchor=center, text=covAccent, font=\sffamily\bfseries\fontsize{16bp}{20bp}\selectfont]
+    at ([yshift=-150bp]current page.north) {EFFECTIVE 系列};
+
+  \node[anchor=center, text=white, font=\sffamily\bfseries\fontsize{44bp}{50bp}\selectfont]
+    at ([yshift=-230bp]current page.north) {高效 Python};
+  \node[anchor=center, text=covAccent, font=\sffamily\bfseries\fontsize{18bp}{22bp}\selectfont]
+    at ([yshift=-275bp]current page.north) {Effective Python, 3e};
+
+  \node[anchor=center, text=white, font=\sffamily\fontsize{13bp}{17bp}\selectfont]
+    at ([yshift=-330bp]current page.north) {125 个写出更好 Python 代码的具体建议};
+  \node[anchor=center, text=white, font=\sffamily\fontsize{11bp}{14bp}\selectfont]
+    at ([yshift=-358bp]current page.north) {125 Specific Ways to Write Better Python};
+
+  \node[anchor=center, text=white, font=\sffamily\fontsize{12bp}{16bp}\selectfont]
+    at ([yshift=-440bp]current page.north) {Brett Slatkin\quad 著};
+
+  \node[anchor=center, text=white, font=\sffamily\fontsize{10bp}{13bp}\selectfont]
+    at ([yshift=-520bp]current page.north) {中文翻译版};
+  \node[anchor=center, text=white, font=\sffamily\fontsize{9bp}{12bp}\selectfont]
+    at ([yshift=-545bp]current page.north) {基于 Addison-Wesley / Pearson 英文第 3 版翻译};
+\end{tikzpicture}
+
+\null
+\clearpage

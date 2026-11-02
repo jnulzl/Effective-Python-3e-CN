@@ -1,0 +1,1339 @@
+一门编程语言的惯用法（idiom）是由其使用者定义的。多年来，Python 社区逐渐使用 Pythonic（地道 Python）这个形容词来描述遵循某种特定风格的代码。Pythonic 风格并非由编译器强制规定或整齐划一，而是在长期使用这门语言、与他人协作的过程中逐渐形成的。Python 程序员倾向于表述明确、化繁为简，并最大化可读性（在解释器（interpreter）中输入 \texttt{import this} 即可阅读《Python 之禅》）。熟悉其他语言的程序员，可能会像写 C++、Java 或任何自己最熟悉的语言那样来写 Python；而初学编程的人，可能还在适应 Python 所能表达的庞大概念范围。了解用 Python 完成最常见任务的最佳——也就是最 Pythonic——方式，对你而言至关重要。这些模式会影响你编写的每一个程序。
+
+\section{Item 1: 了解你正在使用的 Python 版本}
+
+本书中，绝大多数示例代码都针对 Python 3.13（于 2024 年 10 月发布）。本书不涉及 Python 2，尽管有时会提及较早版本的 Python 3，以提供关于该语言如何随时间演变的背景信息。
+
+许多计算机操作系统会预装多个版本的标准 CPython 解释器（interpreter）。然而，命令行中 \texttt{python} 的默认含义可能并不明确。\texttt{python} 通常是 \texttt{python2.7} 的别名，但有时也可能是更旧版本（如 \texttt{python2.6} 或 \texttt{python2.5}）的别名。要确切了解你正在使用的 Python 版本，可以使用 \texttt{--version} 标志：
+
+\begin{codebox}[python]
+$ python --version
+Python 2.7.10
+\end{codebox}
+
+在许多系统中，Python 2 已不再安装，此时 \texttt{python} 命令会报错：
+
+\begin{codebox}[python]
+$ python --version
+-bash: python: command not found
+\end{codebox}
+
+Python 3 通常可通过名称 \texttt{python3} 取得：
+
+\begin{codebox}[python]
+$ python3 --version
+Python 3.12.3
+\end{codebox}
+
+要使用替代的 Python 运行时（runtime），例如 PyPy（https://www.pypy.org），来运行 Python 程序，你需要使用它们各自的命令：
+
+\begin{codebox}[python]
+$ pypy3 --version
+Python 3.10.14 (75b3de9d9035, May 28 2024, 18:06:40)
+[PyPy 7.3.16 with GCC Apple LLVM 15.0.0 (clang-1500.3.9.4)]
+\end{codebox}
+
+你还可以通过检查（inspect）内置模块 \texttt{sys} 中的值，在运行时确定你正在使用的 Python 版本：
+
+\begin{codebox}[python]
+import sys
+print(sys.platform)
+print(sys.implementation.name)
+print(sys.version_info)
+print(sys.version)
+>>>
+darwin
+cpython
+sys.version_info(major=3, minor=12, micro=3,
+releaselevel='final', serial=0)
+3.12.3 (main, Apr  9 2024, 08:09:14)
+[Clang 15.0.0 (clang-1500.3.9.4)]
+\end{codebox}
+
+在很长一段时间里，Python 核心开发者与社区都在同时积极维护对 Python 2 和 Python 3 的支持。这两个版本在重要方面存在差异，并且存在兼容性（incompatibilities）问题，导致移植（porting）十分困难。从第 2 版迁移到第 3 版是一段极其漫长而痛苦的时期，最终于 2020 年 4 月 20 日随着 Python 2.7.18 的发布而告终。这是 Python 2 的最后一个官方版本。对于任何仍需要 Python 2 安全补丁和缺陷修复的人来说，仅剩的选择是付费向商业软件供应商寻求支持，或者自己动手。
+
+自那以后，Python 核心开发者与社区便专注于 Python 3。核心语言、标准库（standard library）以及包与工具组成的生态系统（ecosystem）功能都在不断改进。想要跟上所有正在发生的变化与创新，可能会令人应接不暇。了解新特性的一个好方法是阅读发行说明（release notes，https://docs.python.org/3/whatsnew/index.html），其中着重介绍了每个版本的新增内容与变更。还有一些网站会在你所依赖的社区包更新时通知你（参见Item 116：知道去哪里寻找社区构建的模块）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 3 是 Python 最新且受支持最好的版本，你应该在项目中使用它。
+\item 要确认在你的系统上用于运行 Python 的命令行可执行文件确实是你所期望的那个版本。
+\item Python 2 已不再由核心开发者正式维护。
+\end{itemize}
+
+\section{Item 2: 遵循 PEP 8 风格指南}
+
+Python 增强提案第 8 号（Python Enhancement Proposal \#8，简称 PEP 8）是规定如何格式化 Python 代码（code）的风格指南。只要你写的 Python 代码语法有效，用什么方式写都行。然而，采用一致的风格能让你的代码更易读、更亲切。在更广泛的社区中与其他 Python 程序员共享同一种风格，有助于在项目上展开协作。但即便你是唯一会读自己代码的人，遵循风格指南也能让你日后更容易修改代码，并帮助你规避许多常见错误。
+
+PEP 8 就如何写出清晰的 Python 代码提供了大量细节。随着 Python 语言的演进，它也在持续更新。值得在线通读整份指南（https://www.python.org/dev/peps/pep-0008/）。以下是几条你务必遵循的规则。
+
+\subsection{空白}
+
+在 Python 中，空白（whitespace）具有语法意义。Python 程序员对空白影响代码清晰度的问题尤其敏感。请遵循以下与空白相关的准则：
+
+\begin{itemize}
+\item 使用空格而非制表符（tab）进行缩进。
+\item 每一级具有语法意义的缩进使用四个空格。
+\item 每行长度应为 79 个字符或更少。
+\item 将长表达式延续到额外行时，应在其正常缩进级别基础上再缩进四个空格。
+\item 在文件中，函数（function）与类（class）之间应用两个空行分隔。
+\item 在类中，方法（method）之间应用一个空行分隔。
+\item 在字典（dictionary）中，每个键（key）与冒号之间不要留空白；若对应的值能放在同一行，则在值之前加一个空格。
+\item 在变量赋值（variable assignment）中，\texttt{=} 运算符的前后各留一个——且仅一个——空格。
+\item 对于类型标注（type annotation），确保变量名与冒号之间没有间隔，并在类型信息之前加一个空格。
+\end{itemize}
+
+\subsection{命名}
+
+PEP 8 为语言中的不同部分建议了各具特色的命名风格。这些约定让人在阅读代码时，很容易区分每个名字对应哪种类型。请遵循以下与命名相关的准则：
+
+\begin{itemize}
+\item 函数、变量和属性（attribute）应使用 \texttt{lowercase\_underscore} 格式。
+\item 受保护的实例属性应使用 \texttt{\_leading\_underscore} 格式。
+\item 私有的实例属性应使用 \texttt{\_\_double\_leading\_underscore} 格式。
+\item 类（包括异常）应使用 \texttt{CapitalizedWord} 格式。
+\item 模块级常量（module-level constant）应使用 \texttt{ALL\_CAPS} 格式。
+\item 类中的实例方法（instance method）应使用 \texttt{self}（它指代对象）作为第一个参数的名称。
+\item 类方法（class method）应使用 \texttt{cls}（它指代类）作为第一个参数的名称。
+\end{itemize}
+
+\subsection{表达式与语句}
+
+《Python 之禅》（The Zen of Python）写道：「应该有且仅有一种显而易见的实现方式（There should be one—and preferably only one—obvious way to do it）。」PEP 8 试图在其对表达式（expression）与语句（statement）的指引中把这种风格编成规范：
+
+\begin{itemize}
+\item 使用内联否定（如 \texttt{if a is not b}）而非对肯定表达式取反（如 \texttt{if not a is b}）。
+\item 不要通过比较长度是否为零（如 \texttt{if len(somelist) == 0}）来检查空容器（empty container）或空序列（empty sequence，如 \texttt{[]} 或 \texttt{""}）。应使用 \texttt{if not somelist}，并假定空值会隐式求值为 \texttt{False}。
+\item 对于非空容器或序列（如 \texttt{[1]} 或 \texttt{"hi"}）同理。对于非空值，语句 \texttt{if somelist} 隐式为 \texttt{True}。
+\item 避免单行 \texttt{if} 语句、单行 \texttt{for} 与 \texttt{while} 循环，以及单行 \texttt{except} 复合语句（compound statement）。为了清晰，应把这些语句分散到多行。
+\item 如果一行放不下某个表达式，用圆括号把它括起来，并添加换行与缩进以提升可读性。
+\item 多行表达式优先使用圆括号包围，而非使用 \textbackslash{} 行续接符（line continuation character）。
+\end{itemize}
+
+\subsection{导入}
+
+PEP 8 就如何导入模块（module）并在代码中使用它们给出了一些准则：
+
+\begin{itemize}
+\item 始终将导入语句（包括 \texttt{from x import y}）放在文件顶部。
+\item 导入模块时始终使用绝对名称（absolute name），而非相对于当前模块自身路径的相对名称。例如，要在 \texttt{bar} 包（package）中导入 \texttt{foo} 模块，应使用 \texttt{from bar import foo}，而不是简单的 \texttt{import foo}。
+\item 如果必须进行相对导入（relative import），请使用显式语法 \texttt{from . import foo}。
+\item 导入应分区（section），顺序如下：标准库（standard library）模块、第三方模块、你自己的模块。每个小节（subsection）中的导入应按字母顺序排列。
+\end{itemize}
+
+\subsection{自动化}
+
+如果到此为止你读到的内容看起来需要记很多，我有个好消息：Python 社区正围绕一款通用的自动化 PEP 8 格式化工具达成共识——它叫 \texttt{black}（https://github.com/psf/black），是 Python 软件基金会（Python Software Foundation）的官方项目。
+
+\texttt{black} 提供的配置选项非常少，这让在同一代码库（codebase）上开发的程序员很容易就代码风格达成一致。安装与使用 \texttt{black} 都很简单：
+
+\begin{codebox}[python]
+$ pip install black
+$ python -m black example.py
+reformatted example.py
+All done!
+
+
+1 file reformatted.
+\end{codebox}
+
+除了 \texttt{black}，还有许多其他社区工具可帮你自动改进源码（source code）。许多 IDE 和编辑器都内置了风格检查（style-checking）工具、自动格式化器（auto-formatter）和类似的插件（plug-in）。一款流行的代码分析器（code analyzer）是 \texttt{pylint}（https://github.com/pylint-dev/pylint）；它有助于强制执行 PEP 8 风格指南，并能检测出 Python 程序中许多其他类型的常见错误（更多示例见 Item 3：切勿指望 Python 在编译期检测错误）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 编写 Python 代码时，始终遵循 Python 增强提案第 8 号（Python Enhancement Proposal \#8，PEP 8）风格指南。
+\item 与更广泛的 Python 社区共享同一种风格，有助于与他人协作。
+\item 采用一致的风格能让你日后更容易修改自己的代码。
+\item 像 \texttt{black} 和 \texttt{pylint} 这样的社区工具可以自动遵循 PEP 8，让你轻松保持良好的源码风格。
+\end{itemize}
+
+\section{Item 3: 切勿指望 Python 在编译期检测错误}
+
+加载 Python 程序并准备执行时，源代码会被解析为抽象语法树（abstract syntax tree），并检查明显的结构性错误。例如，构造不当的 \texttt{if} 语句会引发 \texttt{SyntaxError} 异常（exception），指出代码哪里出了问题：
+
+\begin{codebox}[python]
+if True  # Bad syntax
+  print('hello')
+>>>
+Traceback ...
+SyntaxError: expected ':'
+\end{codebox}
+
+值字面量（value literal）中的错误也会较早被检测到并引发异常：
+
+\begin{codebox}[python]
+1.3j5  # Bad number
+>>>
+Traceback ...
+SyntaxError: invalid imaginary literal
+\end{codebox}
+
+遗憾的是，在程序执行之前，这差不多是你能从 Python 获得的全部保护。除了基本的词法标记化（tokenization）错误和解析（parse）错误之外，其他问题都不会被标记为错误。
+
+即便看起来有明显错误的简单函数，由于 Python 高度动态（dynamic）的特性，在程序执行之前也不会被报告为有问题。例如，这里我定义了一个函数，其中变量 \texttt{my\_var} 显然在传给 \texttt{print} 之前没有被赋值：
+
+\begin{codebox}[python]
+def bad_reference():
+    print(my_var)
+    my_var = 123
+\end{codebox}
+
+但是，这个函数直到被执行时才会引发异常：
+
+\begin{codebox}[python]
+bad_reference()
+>>>
+Traceback ...
+UnboundLocalError: cannot access local variable 'my_var'
+where it is not associated with a value
+\end{codebox}
+
+之所以这不被视为静态（static）错误，是因为 Python 程序动态地为局部变量（local variable）和全局变量（global variable）赋值本是合法的。例如，这里我定义了一个函数，它是否有效取决于输入参数：
+
+\begin{codebox}[python]
+def sometimes_ok(x):
+    if x:
+        my_var = 123
+    print(my_var)
+\end{codebox}
+
+下面这次调用运行正常：
+
+\begin{codebox}[python]
+sometimes_ok(True)
+>>>
+123
+\end{codebox}
+
+下面这次则会引发运行时异常：
+
+\begin{codebox}[python]
+sometimes_ok(False)
+>>>
+Traceback ...
+UnboundLocalError: cannot access local variable 'my_var'
+where it is not associated with a value
+\end{codebox}
+
+Python 同样不会提前捕获数学错误。在程序执行之前，下面这看起来显然是个错误：
+
+\begin{codebox}[python]
+def bad_math():
+    return 1 / 0
+\end{codebox}
+
+但是，除法运算符（division operator）的含义可能随所涉及的数值而变化，因此检查此类错误同样被推迟（deferred）到运行时：
+
+\begin{codebox}[python]
+bad_math()
+>>>
+Traceback ...
+ZeroDivisionError: division by zero
+\end{codebox}
+
+Python 同样不会静态地检测出未定义方法（undefined method）、参数过多或过少、返回类型不匹配（mismatched return type），以及许多其他看似明显的问题。有一些社区工具可以帮助你在执行前检测出其中某些错误，例如 \texttt{flake8} 代码检查器（linter，https://github.com/PyCQA/flake8），以及配合内置 \texttt{typing} 模块（built-in module）使用的类型检查器（type checker）（参见 Item 124：考虑通过 typing 进行静态分析以消除缺陷）。
+
+归根结底，在编写地道（idiomatic）Python 时，你会在运行时（runtime）遇到大多数错误。Python 语言优先保证运行时的灵活性（flexibility），而非编译期（compile-time）的错误检测。因此，在运行时检查你的假设是否正确就显得很重要（参见 Item 81：用 assert 检查内部假设，用 raise 抛出未满足的预期），并通过自动化测试（automated test）来验证代码的正确性（参见 Item 109：优先选择集成测试而非单元测试）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 将几乎全部错误检查推迟到运行时，包括在程序启动时本应显而易见的问题的检测。
+\item 像代码检查器和静态分析（static analysis）工具这样的社区项目，可以帮助你在程序执行前捕获一些最常见的错误来源。
+\end{itemize}
+
+\section{Item 4: 编写辅助函数，而非复杂表达式}
+
+Python 简洁（pithy）的语法让编写实现大量逻辑的单行表达式（single-line expression）变得轻而易举。例如，假设我想从某个网站 URL 的查询字符串（query string）中解码出参数。这里每个查询字符串参数都代表一个整数值：
+
+\begin{codebox}[python]
+from urllib.parse import parse_qs
+my_values = parse_qs( "red=5&blue=0&green=",
+keep_blank_values=True)
+print(repr(my_values))
+>>>
+{'red': ['5'], 'blue': ['0'], 'green': ['']}
+\end{codebox}
+
+有些查询字符串参数可能有多个值，有些可能只有一个值，有些可能出现了但值为空，还有些可能完全缺失。在结果字典（dictionary）上使用 \texttt{get} 方法（method），会在各种情况下返回不同的值：
+
+\begin{codebox}[python]
+print("Red:    ", my_values.get("red"))
+print("Green:  ", my_values.get("green"))
+print("Opacity:", my_values.get("opacity"))
+>>>
+Red:     ['5']
+Green:   ['']
+Opacity: None
+\end{codebox}
+
+如果某个参数未提供或为空时，能赋一个默认值 \texttt{0} 就好了。我一开始可能会选择用布尔（Boolean）表达式来做，因为这段逻辑似乎还不值得写一整个 \texttt{if} 语句或辅助函数。
+
+Python 的语法让这种选择太过容易。这里的诀窍在于，空字符串、空列表和零都会隐式求值为 \texttt{False}。因此，当第一个子表达式（subexpression）为 \texttt{False} 时，下面的表达式会求值为 \texttt{or} 运算符之后的子表达式：
+
+\begin{codebox}[python]
+# 针对查询字符串 'red=5&blue=0&green='
+red = my_values.get("red", [""])[0] or 0
+green = my_values.get("green", [""])[0] or 0
+opacity = my_values.get("opacity", [""])[0] or 0
+print(f"Red:     {red!r}")
+print(f"Green:   {green!r}")
+print(f"Opacity: {opacity!r}")
+>>>
+Red:     '5'
+Green:   0
+Opacity: 0
+\end{codebox}
+
+\texttt{red} 的情况能成立，是因为键 \texttt{"red"} 存在于 \texttt{my\_values} 字典中。\texttt{get} 方法检索到的值是一个只有一个成员的列表：字符串 \texttt{"5"}。通过访问列表的索引 \texttt{0} 取到这个元素。随后 \texttt{or} 表达式判定该字符串非空，因此它就是这次操作的结果值。最后，变量 \texttt{red} 被赋值为 \texttt{"5"}。
+
+\texttt{green} 的情况能成立，是因为 \texttt{my\_values} 字典中的值是一个只有一个成员的列表：空字符串。列表索引 \texttt{0} 处的元素被取出。\texttt{or} 表达式判定该字符串为空，因此其返回值应为该操作右侧的参数，也就是 \texttt{0}。最后，变量 \texttt{green} 被赋值为 \texttt{0}。
+
+\texttt{opacity} 的情况能成立，是因为 \texttt{my\_values} 字典中完全缺失这个值。\texttt{get} 方法的行为是：如果键不存在于字典中，就返回它的第二个参数（参见 Item 26：处理缺失的字典键时，优先使用 get 而非 in 和 KeyError）。这种情况下的默认值是一个只有一个成员的列表：空字符串。因此，当在字典中找不到 \texttt{opacity} 时，这段代码做的事情与 \texttt{green} 情况完全一致。
+
+由 \texttt{get}、\texttt{[""]}、\texttt{[0]} 和 \texttt{or} 构成的复杂表达式难以阅读，然而它仍没能做到我需要的一切。我还想确保所有参数值都被转换为整数（integer），这样我就能立即在数学表达式中使用它们。为此，我用内置函数 \texttt{int} 把每个表达式包起来，以将字符串解析为整数：
+
+\begin{codebox}[python]
+red = int(my_values.get("red", [""])[0] or 0)
+\end{codebox}
+
+这段逻辑现在极其难读。视觉噪声（visual noise）太多了。代码不够亲切。代码的新读者得花太多时间去拆解这个表达式，才能弄清楚它到底在做什么。尽管保持简短是好事，但把它都塞进一行并不值得。
+
+尽管 Python 确实支持用于内联 \texttt{if}/\texttt{else} 行为的条件表达式（conditional expression），但在这种情况下使用它们，得到的代码并不比上面的布尔运算符示例清晰多少（参见 Item 7：为简单的内联逻辑考虑使用条件表达式）：
+
+\begin{codebox}[python]
+red_str = my_values.get("red", [""])
+red = int(red_str[0]) if red_str[0] else 0
+\end{codebox}
+
+或者，我可以使用跨多行的完整 \texttt{if} 语句来实现相同的逻辑。看到所有步骤像这样铺开，会让那种密集的写法显得更加复杂：
+
+\begin{codebox}[python]
+green_str = my_values.get("green", [""])
+if green_str[0]:
+    green = int(green_str[0])
+else:
+    green = 0
+\end{codebox}
+
+既然这段逻辑已经分散到多行，要复制粘贴来为其他变量（如 \texttt{red}）赋值时就有点困难了。如果我想反复复用这一功能——即便只是两三次，就像本例这样——那么编写一个辅助函数（helper function）才是正道：
+
+\begin{codebox}[python]
+def get_first_int(values, key, default=0):
+    found = values.get(key, [""])
+    if found[0]:
+        return int(found[0])
+    return default
+\end{codebox}
+
+调用处的代码比使用 \texttt{or} 的复杂表达式和使用条件表达式的两行版本都要清晰得多：
+
+\begin{codebox}[python]
+green = get_first_int(my_values, "green")
+\end{codebox}
+
+一旦你的表达式变得复杂，就该考虑把它们拆分成更小的片段——比如中间变量（intermediate variable）——并把逻辑移入辅助函数。你在可读性（readability）上获得的收益，总会超过简练可能带给你的那点好处。别让 Python 简洁的复杂表达式语法把你拖进这样的泥潭。遵循 DRY 原则（Don't Repeat Yourself，不要重复自己）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 的语法让你极易写出过分复杂、难以阅读的单行表达式。
+\item 把复杂表达式移入辅助函数，尤其是当你需要反复使用同一段逻辑时。
+\end{itemize}
+
+\section{Item 5: 优先使用多重赋值解包而非索引}
+
+Python 内置了 \texttt{tuple} 类型（元组），可用于创建不可变的、有序的值序列（类似的不可变数据结构见 Item 56（"使用 \texttt{dataclasses} 创建不可变对象"））。元组可以为空，也可以只包含一个元素：
+
+\begin{codebox}[python]
+no_snack = ()
+snack = ("chips",)
+\end{codebox}
+
+元组还可以包含多个元素，例如下面这个从字典中取出来的若干键/值对：
+
+\begin{codebox}[python]
+snack_calories = {
+    "chips": 140,
+    "popcorn": 80,
+    "nuts": 190,
+}
+items = list(snack_calories.items())
+print(items)
+>>>
+[('chips', 140), ('popcorn', 80), ('nuts', 190)]
+\end{codebox}
+
+元组的成员可以像列表一样，通过数字索引和切片来访问：
+
+\begin{codebox}[python]
+item = ("Peanut butter", "Jelly")
+first_item = item[0]   # Index
+first_half = item[:1]  # Slice
+print(first_item)
+print(first_half)
+>>>
+Peanut butter
+('Peanut butter',)
+\end{codebox}
+
+元组一旦创建，就不能通过给索引赋新值的方式来修改它：
+
+\begin{codebox}[python]
+pair = ("Chocolate", "Peanut butter")
+pair[0] = "Honey"
+>>>
+Traceback ...
+TypeError: 'tuple' object does not support item assignment
+\end{codebox}
+
+Python 还提供了一种用于解包（unpacking）的语法，允许在一条语句中给多个变量赋值。你在解包赋值中写出的模式，看起来很像在试图修改元组——但那是不允许的——而实际上两者的工作方式截然不同。举个例子，如果你知道某个元组是一对值，那么与其用索引去访问它的元素，不如把它赋值给由两个变量名组成的元组：
+
+\begin{codebox}[python]
+item = ("Peanut butter", "Jelly")
+first, second = item  # Unpacking
+print(first, "and", second)
+>>>
+Peanut butter and Jelly
+\end{codebox}
+
+解包比访问元组的索引视觉上更干净，而且往往需要的代码行数更少。同样的解包模式匹配语法，在赋值给列表、序列，以及可迭代对象（iterable）中嵌套多层任意可迭代对象时也都适用。我并不推荐你在代码里写成下面这样，但了解它的可行性与原理很重要：
+
+\begin{codebox}[python]
+favorite_snacks = {
+    "salty": ("pretzels", 100),
+    "sweet": ("cookies", 180),
+    "veggie": ("carrots", 20),
+}
+((type1, (name1, cals1)),
+ (type2, (name2, cals2)),
+ (type3, (name3, cals3))) = favorite_snacks.items()
+print(f"Favorite {type1} is {name1} with {cals1} calories")
+print(f"Favorite {type2} is {name2} with {cals2} calories")
+print(f"Favorite {type3} is {name3} with {cals3} calories")
+>>>
+Favorite salty is pretzels with 100 calories
+Favorite sweet is cookies with 180 calories
+Favorite veggie is carrots with 20 calories
+\end{codebox}
+
+刚接触 Python 的人可能会惊讶地发现，解包甚至可以在不创建临时变量的情况下就地交换值。下面我使用一个典型的、基于索引的语法，在升序排序算法中交换列表两个位置上的值：
+
+\begin{codebox}[python]
+def bubble_sort(a):
+    for _ in range(len(a)):
+        for i in range(1, len(a)):
+            if a[i] < a[i - 1]:
+                temp = a[i]
+                a[i] = a[i - 1]
+                a[i - 1] = temp
+names = ["pretzels", "carrots", "arugula", "bacon"]
+bubble_sort(names)
+print(names)
+>>>
+['arugula', 'bacon', 'carrots', 'pretzels']
+\end{codebox}
+
+然而，借助解包语法，只需一行就能完成索引的交换：
+
+\begin{codebox}[python]
+def bubble_sort(a):
+    for _ in range(len(a)):
+        for i in range(1, len(a)):
+            if a[i] < a[i - 1]:
+                a[i - 1], a[i] = a[i], a[i - 1]  # Swap
+names = ["pretzels", "carrots", "arugula", "bacon"]
+bubble_sort(names)
+print(names)
+>>>
+['arugula', 'bacon', 'carrots', 'pretzels']
+\end{codebox}
+
+这种交换之所以能工作，是因为赋值语句右侧（\texttt{a[i], a[i-1]}）先被求值，其各个值被放进一个新建的、未命名的临时元组（例如循环第一次迭代时就是 \texttt{("carrots", "pretzels")}）。随后，赋值语句左侧的解包模式（\texttt{a[i-1], a[i]}）被用来接收那个 \texttt{tuple} 值，并分别把它赋给变量名 \texttt{a[i-1]} 和 \texttt{a[i]}。这样，索引 \texttt{0} 处的 \texttt{"pretzels"} 被替换成了 \texttt{"carrots"}，而索引 \texttt{1} 处的 \texttt{"carrots"} 被替换成了 \texttt{"pretzels"}。最后，那个未命名的临时元组悄然消失。
+
+解包另一个很有价值的应用，是在 \texttt{for} 循环的目标列表以及类似的构造中，例如推导式（comprehension）和生成器（generator）表达式（见 Item 40（"用推导式取代 \texttt{map} 和 \texttt{filter}"）和 Item 44（"考虑对大型列表推导式使用生成器表达式"））。例如，下面我没有使用解包来遍历一份零食列表：
+
+\begin{codebox}[python]
+snacks = [("bacon", 350), ("donut", 240), ("muffin", 190)]
+for i in range(len(snacks)):
+    item = snacks[i]
+    name = item[0]
+    calories = item[1]
+    print(f"#{i+1}: {name} has {calories} calories")
+>>>
+#1: bacon has 350 calories
+#2: donut has 240 calories
+#3: muffin has 190 calories
+\end{codebox}
+
+这样能工作，但很啰嗦。为了索引到 \texttt{snacks} 结构的各个层级，需要写很多额外的字符。现在，我改用解包，配合内置函数 \texttt{enumerate}（见 Item 17（"优先使用 \texttt{enumerate} 而非 \texttt{range}"）），得到同样的输出：
+
+\begin{codebox}[python]
+for rank, (name, calories) in enumerate(snacks, 1):
+    print(f"#{rank}: {name} has {calories} calories")
+>>>
+#1: bacon has 350 calories
+#2: donut has 240 calories
+#3: muffin has 190 calories
+\end{codebox}
+
+这是编写这类循环的 Pythonic（地道 Python）写法；它简洁又易懂。通常没有必要再用索引去访问任何东西。
+
+Python 还为 \texttt{list} 的构造（见 Item 16（"优先使用全覆盖解包而非切片"））、函数参数（见 Item 34（"用可变位置参数减少视觉噪声"））、关键字参数（见 Item 35（"用关键字参数提供可选行为"））、多个返回值（见 Item 31（"返回专用的结果对象，而不是要求函数调用者解包超过三个变量"））、结构化模式匹配（见 Item 9（"在流程控制中考虑用 \texttt{match} 做解构；当 \texttt{if} 语句已足够时避免使用"））等提供了更多解包功能。
+
+明智地使用解包，能让你在可能时避免使用索引，从而写出更清晰、更 Pythonic 的代码。不过，这些特性也并非毫无陷阱需要考虑（见 Item 6（"始终用括号包裹单元素元组"））。解包在赋值表达式（assignment expression）（见 Item 8（"用赋值表达式避免重复"））中也无法使用。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 有一种称为解包的专门语法，可以在一条语句中给多个值赋值。
+\item 解包在 Python 中是通用的，可以应用于任何可迭代对象，包括可迭代对象中嵌套多层的可迭代对象。
+\item 通过解包来避免显式地对序列做索引，能够减少视觉噪声，提升代码的清晰度。
+\end{itemize}
+
+\section{Item 6: 始终用括号包裹单元素元组}
+
+在 Python 中，元组字面值有四种形式。第一种是用一对圆括号括起来的、以逗号分隔的元素列表：
+
+\begin{codebox}[python]
+first = (1, 2, 3)
+\end{codebox}
+
+第二种与第一种类似，但带一个可选的末尾逗号，这样跨多行书写时保持一致，也便于编辑：
+
+\begin{codebox}[python]
+second = (1, 2, 3,)
+second_wrapped = (
+    1,
+    2,
+    3,  # Optional comma
+)
+\end{codebox}
+
+第三种是不带任何外层括号、以逗号分隔的元素列表：
+
+\begin{codebox}[python]
+third = 1, 2, 3
+\end{codebox}
+
+最后，第四种与第三种类似，但带一个可选的末尾逗号：
+
+\begin{codebox}[python]
+fourth = 1, 2, 3,
+\end{codebox}
+
+Python 把上述所有这些构造都视为同一个值：
+
+\begin{codebox}[python]
+assert first == second == third == fourth
+\end{codebox}
+
+不过，在创建元组时还有三个需要留意的特殊情况。第一种情况是空元组，它仅仅是左右圆括号：
+
+\begin{codebox}[python]
+empty = ()
+\end{codebox}
+
+第二种情况是单元素元组的形式：你必须包含一个末尾逗号。如果省略了这个末尾逗号，那么你得到的就只是一个加了括号的表达式，而不是元组：
+
+\begin{codebox}[python]
+single_with = (1,)
+single_without = (1)
+assert single_with != single_without
+assert single_with[0] == single_without
+\end{codebox}
+
+第三种特殊情况与第二种类似，只是没有圆括号：
+
+\begin{codebox}[python]
+single_parens = (1,)
+single_no_parens = 1,
+assert single_parens == single_no_parens
+\end{codebox}
+
+这第三种特殊情况——没有圆括号、只有一个末尾逗号——会导致难以诊断的意外问题。请看下面这个来自某电商网站的、带有一个不易察觉 bug 的函数调用：
+
+\begin{codebox}[python]
+to_refund = calculate_refund(
+    get_order_value(user, order.id),
+    get_tax(user.address, order.dest),
+    adjust_discount(user) + 0.1),
+\end{codebox}
+
+你可能会预期返回类型是一个整数、浮点数或十进制数，表示要退还给客户的金额。但事实上，它是一个元组！
+
+\begin{codebox}[python]
+print(type(to_refund))
+>>>
+<class 'tuple'>
+\end{codebox}
+
+问题出在最后一行末尾那个多余的逗号。去掉这个逗号即可修复代码：
+
+\begin{codebox}[python]
+to_refund2 = calculate_refund(
+    get_order_value(user, order.id),
+    get_tax(user.address, order.dest),
+    adjust_discount(user) + 0.1)  # No trailing comma
+print(type(to_refund2))
+>>>
+<class 'int'>
+\end{codebox}
+
+这样一个逗号字符，可能在不经意间被写进你的代码里，导致行为发生改变，即便仔细检查也很难追踪。这个出错的逗号分隔符，也可能是你在编辑元组、列表、集合或函数调用中的元素后遗留下来、忘记删掉的。这种情况比你预想的更常发生！
+
+不带外层括号的单元素元组的另一个问题是，它们很难从赋值语句移动到表达式中。例如，如果我想把单元素元组 \texttt{1,} 复制进一个列表，就必须用括号把它包起来。如果忘了这么做，最终传给外层形式的就不是元组，而是更多个元素或参数：
+
+\begin{codebox}[python]
+value_a = 1,    # No parentheses, right
+list_b = [1,]   # No parentheses, wrong
+list_c = [(1,)] # Parentheses, right
+print('A:', value_a)
+print('B:', list_b)
+print('C:', list_c)
+>>>
+A: (1,)
+B: [1]
+C: [(1,)]
+\end{codebox}
+
+单元素元组也可能出现在赋值语句的左侧，作为解包语法的一部分（见 Item 5（"优先使用多重赋值解包而非索引"）、Item 31（"返回专用的结果对象，而不是要求函数调用者解包超过三个变量"）和 Item 16（"优先使用全覆盖解包而非切片"））。
+
+令人惊讶的是，取决于返回的值，下面所有这些赋值都是被允许的，但它们会产生三种不同的结果：
+
+\begin{codebox}[python]
+def get_coupon_codes(user):
+    ...
+    return [['DEAL20']]
+    ...
+(a1,), = get_coupon_codes(user)
+(a2,) = get_coupon_codes(user)
+(a3), = get_coupon_codes(user)
+(a4) = get_coupon_codes(user)
+a5, = get_coupon_codes(user)
+a6 = get_coupon_codes(user)
+assert a1 not in (a2, a3, a4, a5, a6)
+assert a2 == a3 == a5
+assert a4 == a6
+\end{codebox}
+
+有时，自动源代码格式化工具（见 Item 2（"遵循 PEP 8 风格指南"））和静态分析（static analysis）工具（见 Item 3（"永远别指望 Python 在编译期发现错误"））能让末尾逗号问题更显眼。但往往直到程序或测试套件开始表现异常，它才被人注意到。避免这种情况的最佳办法是：无论单元素元组出现在赋值的左侧还是右侧，都要用外层括号把它写出来。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 中的元组字面值可以有可选的外层括号和可选的末尾逗号，但有少数几种特殊情况除外。
+\item 单元素元组在它唯一的那个元素之后必须有一个末尾逗号，外层括号则是可选的。
+\item 在一个表达式末尾很容易多出一个多余的逗号，这会把表达式的含义变成单元素元组，从而让程序出错。
+\end{itemize}
+
+\section{Item 7: 为简单内联逻辑考虑使用条件表达式}
+
+Python 的 \texttt{if} 语句并不是表达式。\texttt{if} 块、\texttt{elif} 块和 \texttt{else} 块各自都可以包含多条额外的语句。这些块作为一个整体并不会求值为单个值，因而无法存储到变量中，也无法作为函数参数传递。
+
+Python 还支持条件表达式（conditional expression），它允许你在几乎任何允许出现表达式的地方插入 \texttt{if}/\texttt{elif}/\texttt{else} 的行为。例如，下面我用条件表达式根据一个布尔（Boolean）测试来给变量赋值：
+
+\begin{codebox}[python]
+i = 3
+x = "even" if i % 2 == 0 else "odd"
+print(x)
+>>>
+odd
+\end{codebox}
+
+这种表达式结构用起来很方便，特别是一次性使用时，而且会让人想起你在 C 及其他语言中可能熟悉的那个三元运算符（ternary operator）（例如 \texttt{condition ? true\_value : false\_value}）。对于像这样简单的赋值，甚至是在函数调用的参数列表里（例如 \texttt{my\_func(1 if x else 2)}），条件表达式都是兼顾代码简洁与灵活性的好选择。
+
+有一点很关键需要留意：Python 中的条件表达式与其他语言中的三元运算符顺序不同。在 C 里，测试表达式写在最前面；而在 Python 里，当测试表达式为真（truthy）时要先被求值的表达式写最前面。例如，你可能会以为下面这段代码会调用 \texttt{fail} 函数并抛出一个异常；但实际上 \texttt{fail} 函数从未执行，因为测试条件是 \texttt{False}：
+
+\begin{codebox}[python]
+def fail():
+    raise Exception("Oops")
+x = fail() if False else 20
+print(x)
+>>>
+20
+\end{codebox}
+
+Python 推导式（comprehension）中的 \texttt{if} 子句在过滤数据时有类似的语法和行为（参见 Item 40「用推导式替代 map 和 filter」以及 Item 44「考虑对大型列表推导式使用生成器表达式」）。例如，下面我在列表推导式里用 \texttt{if} 子句，只在计算结果列表时包含 \texttt{x} 的偶数值：
+
+\begin{codebox}[python]
+result = [x / 4 for x in range(10) if x % 2 == 0]
+print(result)
+>>>
+[0.0, 0.5, 1.0, 1.5, 2.0]
+\end{codebox}
+
+被求值的表达式（\texttt{x / 4}）写在了 \texttt{if} 测试表达式（\texttt{x \% 2 == 0}）的前面，和之前条件表达式中的顺序一样。
+
+在 Python 引入条件表达式之前，人们有时会借助布尔逻辑来实现类似的行为（详见 Item 4「编写辅助函数，而非复杂表达式」）。例如，下面这个表达式就等价于上面的条件表达式：
+
+\begin{codebox}[python]
+x = (i % 2 == 0 and "even") or "odd"
+\end{codebox}
+
+这种逻辑形式相当令人困惑，因为你得知道 \texttt{and} 会返回第一个假值（falsey value）或最后一个真值（truthy value），而 \texttt{or} 会返回第一个真值或最后一个假值（详见 Item 23「将迭代器传给 any 和 all 以实现高效的短路逻辑」）。
+
+此外，如果你想在条件为真时返回一个假值，用布尔运算符的办法就行不通了（例如 \texttt{x = (i \% 2 == 0 and []) or [1]} 总是求值为 \texttt{[1]}）。这一切都不直观且容易出错，这也正是条件表达式最初被加入语言的部分原因。
+
+现在，我们把同样的这段逻辑写成一个四行的 \texttt{if} 语句，而不是像前面那样单行：
+
+\begin{codebox}[python]
+if i % 2 == 0:
+    x = "even"
+else:
+    x = "odd"
+\end{codebox}
+
+虽然这样更长，但在几个方面可能更好。首先，如果我以后想在每个条件分支里做更多事情，比如打印调试信息，我可以直接做，而不必改变代码结构：
+
+\begin{codebox}[python]
+if i % 2 == 0:
+    x = "even"
+    print("It was even!")  # 新增
+else:
+    x = "odd"
+\end{codebox}
+
+我还可以用 \texttt{elif} 块在同一个语句里插入额外的分支：
+
+\begin{codebox}[python]
+if i % 2 == 0:
+    x = "even"
+elif i % 3 == 0:  # 新增
+    x = "divisible by three"
+else:
+    x = "odd"
+\end{codebox}
+
+如果我确实需要在单条表达式里兼顾简洁、把这段逻辑塞进去，我可以把它整体搬到一个辅助函数（helper function）里，然后以内联方式调用：
+
+\begin{codebox}[python]
+def number_group(i):
+    if i % 2 == 0:
+        return "even"
+    else:
+        return "odd"
+x = number_group(i)  # 简短调用
+\end{codebox}
+
+额外的好处是，这个辅助函数可以在多处复用，而不是像条件表达式那样只能用一次。
+
+究竟该用条件表达式、完整的 \texttt{if} 语句，还是把 \texttt{if} 语句包进辅助函数，取决于具体的情况。
+
+当条件表达式不得不拆成多行时，你应该避免使用它。例如，下面我调用的函数名太长，导致条件表达式必须用外层圆括号来换行：
+
+\begin{codebox}[python]
+x = (my_long_function_call(1, 2, 3) if i % 2 == 0
+     else my_other_long_function_call(4, 5, 6))
+\end{codebox}
+
+这读起来相当费劲。而且，如果你对这段代码使用一个自动格式化工具（auto-formatter）（参见 Item 2「遵循 PEP 8 风格指南」），这个条件表达式很可能会被改写成比标准的 \texttt{if}/\texttt{else} 语句占用更多行的代码：
+
+\begin{codebox}[python]
+x = (
+    my_long_function_call(1, 2, 3)
+    if i % 2 == 0
+    else my_other_long_function_call(4, 5, 6)
+)
+\end{codebox}
+
+另一个可以和条件表达式对比的 Python 语言特性是赋值表达式（assignment expression）（参见 Item 8「用赋值表达式消除重复代码」），它同样允许在表达式中写出类似语句的行为。关键区别在于：赋值表达式在存在歧义的语境下使用时必须用圆括号包起来，而条件表达式不需要外层圆括号，但缺少圆括号又会损害可读性。
+
+例如，下面这条带括号赋值表达式的 \texttt{if} 语句是合法的：
+
+\begin{codebox}[python]
+x = 2
+y = 1
+if x and (z := x > y):
+    ...
+\end{codebox}
+
+但下面这条没有外层圆括号的 \texttt{if} 语句则是语法错误：
+
+\begin{codebox}[python]
+if x and z := x > y:
+    ...
+>>>
+Traceback ...
+SyntaxError: cannot use assignment expressions with expression
+\end{codebox}
+
+对于条件表达式，则不需要圆括号。由于下面两种形式都合法，很难判断程序员原本的意图是什么：
+
+\begin{codebox}[python]
+if x > y if z else w:    # 含糊
+    ...
+if x > (y if z else w):  # 清晰
+    ...
+\end{codebox}
+
+赋值表达式在用作函数调用的参数列表时，同样需要外层圆括号：
+
+\begin{codebox}[python]
+z = dict(
+    your_value=(y := 1),
+)
+\end{codebox}
+
+省略圆括号则是语法错误：
+
+\begin{codebox}[python]
+w = dict(
+    other_value=y := 1,
+)
+>>>
+Traceback ...
+SyntaxError: invalid syntax
+\end{codebox}
+
+相比之下，条件表达式在这种语境下不需要外层圆括号，而正因缺少圆括号，代码反而可能更啰嗦、更难读：
+
+\begin{codebox}[python]
+v = dict(
+    my_value=1 if x else 3,
+)
+\end{codebox}
+
+归根结底：要自己判断。在很多情况下，条件表达式很有价值，能提升清晰度。有时带上外层圆括号更好，有时则不然。条件表达式太容易被过度使用，从而写出让新读者难以理解的、晦涩的代码。拿不准时，就用普通的 \texttt{if} 语句。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 的条件表达式允许你把 \texttt{if} 语句放到几乎任何通常会出现表达式的地方。
+\item 在条件表达式中，测试表达式、真值结果表达式、假值结果表达式的排列顺序，与其他语言里三元运算符的顺序不同。
+\item 不要在使用条件表达式会让代码对新读者而言更含糊、更难读的地方使用它。
+\item 当不清楚条件表达式是否带来明显好处时，优先使用标准的 \texttt{if} 语句和辅助函数。
+\end{itemize}
+
+\section{Item 8: 用赋值表达式消除重复代码}
+
+赋值表达式（assignment expression）——也称为海象运算符（walrus operator）——是 Python 3.8 引入的一种新语法特性，用于解决该语言中长期存在、可能导致代码重复的问题。普通的赋值语句写作 \texttt{a = b}，读作「a 等于 b」，而赋值表达式写作 \texttt{a := b}，读作「a 海象 b」（因为 \texttt{:=} 看起来像一双眼睛和一对獠牙）。赋值表达式之所以有用，是因为它让你能在赋值语句不被允许的地方为变量赋值，例如 \texttt{if} 语句的测试表达式中。赋值表达式的值，就是海象运算符左侧标识符所被赋予的值。
+
+例如，假设我有一篮新鲜水果，要为一家果汁吧打理。这里我先定义这篮水果的内容：
+
+\begin{codebox}[python]
+fresh_fruit = {
+    "apple": 10,
+    "banana": 8,
+    "lemon": 5,
+}
+\end{codebox}
+
+当有顾客走到柜台点一份柠檬水时，我需要确认篮中至少有一颗柠檬可以榨汁。这里我先取出柠檬的数量，再用 \texttt{if} 语句检查其是否非零：
+
+\begin{codebox}[python]
+def make_lemonade(count):
+    ...
+def out_of_stock():
+    ...
+count = fresh_fruit.get("lemon", 0)
+if count:
+    make_lemonade(count)
+else:
+    out_of_stock()
+>>>
+Making 5 lemons into lemonade
+\end{codebox}
+
+这段看似简单的代码的问题在于，它比必要的更啰嗦。\texttt{count} 变量只在 \texttt{if} 语句的第一个代码块中使用。在 \texttt{if} 语句上方定义 \texttt{count}，会让它看起来比实际更重要——仿佛其后所有代码（包括 \texttt{else} 块）都需要访问 \texttt{count} 变量，而事实并非如此。
+
+这种「取出一个值、检查其是否为真值、然后再使用它」的模式在 Python 中极其常见。许多程序员试图用各种有损可读性的小技巧来规避对 \texttt{count} 的多次引用（参见 Item 4（「用辅助函数代替复杂表达式」）和 Item 7（「考虑用条件表达式处理简单的内联逻辑」））。所幸，语言加入了赋值表达式来简化这类代码。下面我用海象运算符重写上面的例子：
+
+\begin{codebox}[python]
+if count := fresh_fruit.get("lemon", 0):
+    make_lemonade(count)
+else:
+    out_of_stock()
+\end{codebox}
+
+虽然这只短了一行，但可读性提升很大，因为现在很清楚 \texttt{count} 只与 \texttt{if} 语句的第一个代码块相关。赋值表达式先把一个值赋给 \texttt{count} 变量，然后在该 \texttt{if} 语句的语境下求值，以决定如何进行流程控制。这种「先赋值、再求值」的两步行为，正是海象运算符的本质。
+
+柠檬很浓，我的柠檬水配方只需一颗就够，所以一个非零的真值检查足矣。但如果顾客点的是苹果酒，我就得确保至少有四颗苹果。这里我从 \texttt{fresh\_fruit} 字典中取出 \texttt{count} 值，然后在 \texttt{if} 语句的测试表达式中使用比较：
+
+\begin{codebox}[python]
+def make_cider(count):
+    ...
+count = fresh_fruit.get("apple", 0)
+if count >= 4:
+    make_cider(count)
+else:
+    out_of_stock()
+>>>
+Making cider with 10 apples
+\end{codebox}
+
+这与柠檬水的例子存在同样的问题：\texttt{count} 的赋值把不必要的注意力引向了这个变量。这里我也用海象运算符来提升这段代码的清晰度：
+
+\begin{codebox}[python]
+if (count := fresh_fruit.get("apple", 0)) >= 4:
+    make_cider(count)
+else:
+    out_of_stock()
+\end{codebox}
+
+这与预期一致，并且让代码短了一行。需要注意的是，我必须给赋值表达式加上括号，才能在 \texttt{if} 语句中把它与 \texttt{4} 比较。在柠檬水的例子中则无需外层括号，因为那个赋值表达式本身就是作为非零的真值检查独立存在的，并不是更大表达式的子表达式。与其他表达式一样，应尽可能避免给赋值表达式加括号，以减少视觉噪声。
+
+这种重复模式的另一个常见变体是：我需要根据某个条件在外层作用域中赋值一个变量，随后很快又在一个函数调用中引用该变量。例如，假设有顾客点了一些香蕉奶昔。要做奶昔，我至少需要相当于两根香蕉的切片，否则就会抛出 \texttt{OutOfBananas} 异常。下面我用一种典型方式实现这段逻辑：
+
+\begin{codebox}[python]
+def slice_bananas(count):
+    ...
+class OutOfBananas(Exception):
+    pass
+def make_smoothies(count):
+    ...
+pieces = 0
+count = fresh_fruit.get("banana", 0)
+if count >= 2:
+    pieces = slice_bananas(count)
+try:
+    smoothies = make_smoothies(pieces)
+except OutOfBananas:
+    out_of_stock()
+>>>
+Slicing 8 bananas
+Making smoothies with 32 banana slices
+\end{codebox}
+
+另一种常见做法是把 \texttt{pieces = 0} 的赋值放进 \texttt{else} 块：
+
+\begin{codebox}[python]
+count = fresh_fruit.get("banana", 0)
+if count >= 2:
+    pieces = slice_bananas(count)
+else:
+    pieces = 0  # 已移动
+try:
+    smoothies = make_smoothies(pieces)
+except OutOfBananas:
+    out_of_stock()
+\end{codebox}
+
+第二种做法会让人觉得别扭，因为它意味着 \texttt{pieces} 变量有两个可能的初始定义位置——分别在 \texttt{if} 语句的两个代码块中。这种拆分定义在技术上能成立，是因为 Python 的作用域规则（参见 Item 33（「了解闭包如何与变量作用域和 \texttt{nonlocal} 交互」）），但它既不好读也不易发现，所以许多人更偏好上面的写法，即先写 \texttt{pieces = 0} 的赋值。
+
+海象运算符可以把这个例子缩短一行代码。这一小改动消除了对 \texttt{count} 变量的任何强调。现在更清楚的是，\texttt{pieces} 在 \texttt{if} 语句之后仍然重要：
+
+\begin{codebox}[python]
+pieces = 0
+if (count := fresh_fruit.get("banana", 0)) >= 2:  # 已修改
+    pieces = slice_bananas(count)
+try:
+    smoothies = make_smoothies(pieces)
+except OutOfBananas:
+    out_of_stock()
+\end{codebox}
+
+使用海象运算符还能改善把 \texttt{pieces} 的定义拆分到 \texttt{if} 语句两个部分的做法的可读性。当 \texttt{count} 的定义不再位于 \texttt{if} 语句之前时，追踪 \texttt{pieces} 变量变得更加容易：
+
+\begin{codebox}[python]
+if (count := fresh_fruit.get("banana", 0)) >= 2:
+    pieces = slice_bananas(count)
+else:
+    pieces = 0  # 已移动
+try:
+    smoothies = make_smoothies(pieces)
+except OutOfBananas:
+    out_of_stock()
+\end{codebox}
+
+刚接触 Python 的程序员常有的一个困扰，是缺少灵活的 \texttt{switch}/\texttt{case} 语句。要近似实现这类功能，通常的做法是把多个 \texttt{if}、\texttt{elif} 和 \texttt{else} 块层层嵌套。
+
+例如，假设我想实现一套优先级系统，让每位顾客自动得到当前最好的果汁，而无需点单。下面我定义这样的逻辑：先上香蕉奶昔，然后是苹果酒，最后才是柠檬水：
+
+\begin{codebox}[python]
+count = fresh_fruit.get("banana", 0)
+if count >= 2:
+    pieces = slice_bananas(count)
+    to_enjoy = make_smoothies(pieces)
+else:
+    count = fresh_fruit.get("apple", 0)
+    if count >= 4:
+        to_enjoy = make_cider(count)
+    else:
+        count = fresh_fruit.get("lemon", 0)
+        if count:
+            to_enjoy = make_lemonade(count)
+        else:
+            to_enjoy = "Nothing"
+\end{codebox}
+
+像这样丑陋的写法在 Python 代码中出奇地常见。所幸，海象运算符提供了一种优雅的解决方案，用起来几乎和专门用于 \texttt{switch}/\texttt{case} 语句的语法一样灵活：
+
+\begin{codebox}[python]
+if (count := fresh_fruit.get("banana", 0)) >= 2:
+    pieces = slice_bananas(count)
+    to_enjoy = make_smoothies(pieces)
+elif (count := fresh_fruit.get("apple", 0)) >= 4:
+    to_enjoy = make_cider(count)
+elif count := fresh_fruit.get("lemon", 0):
+    to_enjoy = make_lemonade(count)
+else:
+    to_enjoy = "Nothing"
+\end{codebox}
+
+使用赋值表达式的版本只比原版短了五行，但由于嵌套和缩进的减少，可读性的提升却是巨大的。如果你在自己的代码中看到上面那种丑陋的写法冒头，我建议尽量改用海象运算符（另一种做法参见 Item 9（「在流程控制中考虑用 \texttt{match} 解构；当 \texttt{if} 语句已足够时避免使用」））。
+
+刚接触 Python 的程序员的另一个常见困扰，是缺少 \texttt{do}/\texttt{while} 循环结构。例如，假设我想在每一次新水果送达时把果汁装瓶，直到没有水果剩下为止。这里我用 \texttt{while} 循环实现这段逻辑：
+
+\begin{codebox}[python]
+def pick_fruit():
+    ...
+def make_juice(fruit, count):
+    ...
+bottles = []
+fresh_fruit = pick_fruit()
+while fresh_fruit:
+    for fruit, count in fresh_fruit.items():
+        batch = make_juice(fruit, count)
+        bottles.extend(batch)
+    fresh_fruit = pick_fruit()
+\end{codebox}
+
+这段代码之所以重复，是因为它需要两次独立的 \texttt{fresh\_fruit = pick\_fruit()} 调用：一次在循环之前设置初始条件，另一次在循环末尾补充已送达水果的列表。
+
+在这种情况下，提高代码复用率的一种策略是使用「循环加半（loop-and-a-half）」惯用法。这消除了冗余的行，但也通过把 \texttt{while} 循环变成哑无限循环，削弱了该循环本身的作用。现在循环全部的流程控制都依赖于条件 \texttt{break} 语句：
+
+\begin{codebox}[python]
+bottles = []
+while True:                     # 循环
+    fresh_fruit = pick_fruit()
+    if not fresh_fruit:         # 加半
+        break
+    for fruit, count in fresh_fruit.items():
+        batch = make_juice(fruit, count)
+        bottles.extend(batch)
+\end{codebox}
+
+海象运算符免去了对「循环加半」惯用法的需要，它让 \texttt{fresh\_fruit} 变量在 \texttt{while} 循环的每一轮中都能被重新赋值，然后按条件求值。这个方案短小易读，应该是你代码中的首选做法：
+
+\begin{codebox}[python]
+bottles = []
+while fresh_fruit := pick_fruit():  # 已修改
+    for fruit, count in fresh_fruit.items():
+        batch = make_juice(fruit, count)
+        bottles.extend(batch)
+\end{codebox}
+
+赋值表达式还能在许多其他场景中用来消除冗余（例如参见 Item 42（「用赋值表达式减少推导式中的重复」））。
+
+总的来说，当你发现自己在一组代码行中多次重复同一个表达式或赋值时，就该考虑使用赋值表达式来提升可读性了。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 赋值表达式使用海象运算符（\texttt{:=}）在单一表达式中同时完成变量名的赋值与求值，从而减少重复。
+\item 当赋值表达式作为更大表达式的子表达式时，必须用括号将其括起来。
+\item 虽然 Python 中没有 \texttt{switch}/\texttt{case} 语句和 \texttt{do}/\texttt{while} 循环，但借助赋值表达式，可以更清晰地模拟它们的功能。
+\end{itemize}
+
+\section{Item 9: 在流程控制中用 match 做解构；当 if 语句已足够时避免使用}
+
+\verb|match| 语句是 Python 中相对较新的特性，在 3.10 版本中引入。由于其功能众多且各不相同，\verb|match| 的学习曲线相当陡峭：它就像是嵌入在 Python 内部的一门迷你语言，类似于推导式（comprehension）那套独特的写法（参见 Item 40（"用推导式替代 \verb|map| 和 \verb|filter|"）与 Item 44（"对大型列表推导式考虑使用生成器表达式"））。
+
+初看之下，\verb|match| 语句似乎为 Python 提供了其他编程语言中 \verb|switch| 语句那样人们期盼已久的行为（另一种做法参见 Item 8（"用赋值表达式避免重复"））。
+
+例如，假设我在编写一个车辆辅助程序，让它对交通信号灯的颜色做出反应。这里我用一个简单的 Python \verb|if| 语句来实现：
+
+\begin{codebox}[python]
+def take_action(light):
+    if light == "red":
+        print("Stop")
+    elif light == "yellow":
+        print("Slow down")
+    elif light == "green":
+        print("Go!")
+    else:
+        raise RuntimeError
+\end{codebox}
+
+我可以确认这个函数按预期工作：
+
+\begin{codebox}[python]
+take_action("red")
+take_action("yellow")
+take_action("green")
+>>>
+Stop
+Slow down
+Go!
+\end{codebox}
+
+要使用 \verb|match| 语句，我可以为对应的每个 \verb|if|、\verb|elif| 和 \verb|else| 条件创建 \verb|case| 子句：
+
+\begin{codebox}[python]
+def take_match_action(light):
+    match light:
+        case "red":
+            print("Stop")
+        case "yellow":
+            print("Slow down")
+        case "green":
+            print("Go!")
+        case _:
+            raise RuntimeError
+\end{codebox}
+
+使用 \verb|match| 语句似乎比使用 \verb|if| 语句更好，因为我可以去掉对 \verb|light| 变量的重复引用，并且每个条件分支里都可以省去 \verb|==| 运算符。不过，这段代码仍然不够理想，因为它处处都在使用字符串字面量。要修复这个问题，我通常会做的就是在模块级别为每个灯的颜色创建一个常量，并修改代码使用这些常量，像这样：
+
+\begin{codebox}[python]
+# Added these constants
+RED = "red"
+YELLOW = "yellow"
+GREEN = "green"
+def take_constant_action(light):
+    match light:
+        case RED:               # Changed
+            print("Stop")
+        case YELLOW:            # Changed
+            print("Slow down")
+        case GREEN:             # Changed
+            print("Go!")
+        case _:
+            raise RuntimeError
+>>>
+Traceback ...
+SyntaxError: name capture 'RED' makes remaining patterns
+unreachable
+\end{codebox}
+
+不幸的是，这段代码有错——而且是个晦涩难懂的错。问题在于，\verb|match| 语句假设出现在 \verb|case| 关键字之后的简单变量名是捕获模式（capture pattern）。为了说明这是什么意思，这里我把 \verb|match| 语句缩短到只剩一个本应匹配 \verb|RED| 的分支：
+
+\begin{codebox}[python]
+def take_truncated_action(light):
+    match light:
+        case RED:
+            print("Stop")
+\end{codebox}
+
+现在我传入 \verb|GREEN| 来调用这个函数。我期望先求值 \verb|match light| 子句，并在当前作用域中查找 \verb|light| 变量，使其解析为 \verb|"green"|。接着，我期望求值 \verb|case RED| 子句，并将 \verb|RED| 变量查找解析为 \verb|"red"|。这两个值并不匹配（即 \verb|"green"| 对比 \verb|"red"|），因此我预期不会有任何输出：
+
+\begin{codebox}[python]
+take_truncated_action(GREEN)
+>>>
+Stop
+\end{codebox}
+
+令人意外的是，\verb|match| 语句执行了 \verb|RED| 分支。这里我用 \verb|print| 来弄清楚发生了什么：
+
+\begin{codebox}[python]
+def take_debug_action(light):
+    match light:
+        case RED:
+            print(f"{RED=}, {light=}")
+take_debug_action(GREEN)
+>>>
+RED='green', light='green'
+\end{codebox}
+
+\verb|case| 子句并没有去查找 \verb|RED| 的值，而是把 \verb|light| 变量的值赋给了 \verb|RED|！\verb|match| 语句所做的这件事，类似于解包（unpacking）的行为（参见 Item 5（"优先使用多重赋值解包而非索引"））。\verb|case RED| 并不是被翻译成 \verb|light == RED|，而是 Python 判断多重赋值 \verb|(RED,) = (light,)| 是否能无错误地执行，类似于这样：
+
+\begin{codebox}[python]
+def take_unpacking_action(light):
+    try:
+        (RED,) = (light,)
+    except TypeError:
+        # Did not match
+        ...
+    else:
+        # Matched
+        print(f"{RED=}, {light=}")
+\end{codebox}
+
+上面那个最初的语法错误之所以发生，是因为 Python 在编译期就判定赋值 \verb|(RED,) = (light,)| 对 \verb|light| 的任何取值都能成立，于是带有 \verb|case YELLOW| 和 \verb|case GREEN| 的后续子句就都不可达了。
+
+针对这个问题，一个变通办法是确保在 \verb|case| 子句的变量引用中含有一个 \verb|.| 字符。点运算符（dot operator）的存在会让 Python 去查找属性并做相等性测试，而不是把变量名当作捕获模式。例如，这里我通过使用内置的 \verb|enum| 模块和点运算符来访问每个常量名，从而达到了原来的预期行为：
+
+\begin{codebox}[python]
+import enum                     # Added
+class ColorEnum(enum.Enum):     # Added
+    RED = "red"
+    YELLOW = "yellow"
+    GREEN = "green"
+def take_enum_action(light):
+    match light:
+        case ColorEnum.RED:     # Changed
+            print("Stop")
+        case ColorEnum.YELLOW:  # Changed
+            print("Slow down")
+        case ColorEnum.GREEN:   # Changed
+            print("Go!")
+        case _:
+            raise RuntimeError
+\end{codebox}
+
+尽管这段代码现在能按预期工作，但在上面 \verb|take\_action| 函数中，很难看出 \verb|match| 版本相比更简单的 \verb|if| 版本有什么好处。\verb|if| 版本是 9 行，而 \verb|match| 版本是 10 行。\verb|if| 版本在每个分支都重复 \verb|light ==| 前缀，而 \verb|match| 版本则为那些常量重复 \verb|ColorEnum.| 前缀。表面上看，两者半斤八两。如果 \verb|match| 语句并不是一个很有说服力的特性，Python 为什么要往语言里加入它呢？
+
+\subsection{match 用于解构}
+
+解构（destructuring）是一种编程语言技术，用来以最少的语法从一个复杂的嵌套数据结构中提取出各个组成部分。Python 程序员一直都在毫不察觉地使用解构。例如，在这个 \verb|for| 循环中，把 \verb|enumerate| 的返回值多重赋给 \verb|index, value| 就是一种解构形式（参见 Item 17（"优先使用 enumerate 而非 range"））：
+
+\begin{codebox}[python]
+for index, value in enumerate("abc"):
+    print(f"index {index} is {value}")
+>>>
+index 0 is a
+index 1 is b
+index 2 is c
+\end{codebox}
+
+Python 长久以来都支持对深度嵌套的元组和列表进行解构赋值（参见 Item 16（"优先使用捕获型解包而非切片"））。\verb|match| 语句对语言做了扩展，也支持针对字典、集合以及用户自定义类的这种类解包行为，且专门用于流程控制。当你的代码需要处理异构对象图（heterogeneous object graph）和半结构化数据时，\verb|match| 所启用的结构化模式匹配（structural pattern matching）技术格外有价值。（函数式风格编程中类似的惯用法有代数数据类型、和类型与带标签联合。）
+
+例如，假设我想搜索一棵二叉树，判断它是否包含某个给定值。我可以把二叉树表示为一个三元素的元组（tuple），其中第一个下标是值，第二个下标是左（较小值）子节点，第三个下标是右（较大值）子节点。第二个或第三个位置上的 \verb|None| 表示没有子节点。对于叶子节点，我只需把值直接内联写进去，而不必再用一个嵌套元组包裹。这里我定义了一棵包含五个值（7、9、10、11、13）的嵌套树：
+
+\begin{codebox}[python]
+my_tree = (10, (7, None, 9), (13, 11, None))
+\end{codebox}
+
+我可以用简单的 \verb|if| 语句实现一个递归函数，来测试一棵树是否包含某个值。\verb|tree| 参数可能是 \verb|None|（表示一个缺失的子节点），也可能是一个非元组（表示一个叶子节点），因此这段代码需要在解包三元素元组的节点表示之前，先确保这些情况被处理：
+
+\begin{codebox}[python]
+def contains(tree, value):
+    if not isinstance(tree, tuple):
+        return tree == value
+    pivot, left, right = tree
+    if value < pivot:
+        return contains(left, value)
+    elif value > pivot:
+        return contains(right, value)
+    else:
+        return value == pivot
+\end{codebox}
+
+当节点值可比较时，这个函数按预期工作：
+
+\begin{codebox}[python]
+assert contains(my_tree, 9)
+assert not contains(my_tree, 14)
+\end{codebox}
+
+现在我可以用 \verb|match| 语句重写这个函数：
+
+\begin{codebox}[python]
+def contains_match(tree, value):
+    match tree:
+        case pivot, left, _ if value < pivot:
+            return contains_match(left, value)
+        case pivot, _, right if value > pivot:
+            return contains_match(right, value)
+        case (pivot, _, _) | pivot:
+            return pivot == value
+\end{codebox}
+
+使用 \verb|match|，对 \verb|isinstance| 的调用被消除了，解包赋值也得以避免，代码的结构（使用 \verb|case| 子句）更加规整，逻辑更简单也更容易理解，而且函数只有 7 行代码，而不像 \verb|if| 版本需要 9 行。这让 \verb|match| 语句显得相当有吸引力（另一个例子参见 Item 76（"了解如何将多线程 I/O 移植到 asyncio"））。
+
+在这个函数中，\verb|match| 的工作方式是：每个 \verb|case| 子句都尝试用给定的解构模式来提取 \verb|tree| 参数的内容。在 Python 判定结构匹配之后，它会再求值后续的任何 \verb|if| 子句，其工作方式类似于推导式中的 \verb|if| 子句。当那个有时被称为守卫表达式（guard expression）的 \verb|if| 子句求值为 \verb|True| 时，该 \verb|case| 块中缩进的语句会被执行，其余的则被跳过。如果没有任何 \verb|case| 子句与输入值匹配，那么 \verb|match| 语句就什么都不做，直接跳过。
+
+这段代码还使用了 \verb||| 管道运算符（pipe operator）来为最后一个 \verb|case| 分支添加一个或模式（or pattern）。这让 \verb|case| 子句可以匹配所给的两个模式中的任意一个：\verb|(pivot, \_, \_)| 或 \verb|pivot|。正如你可能还记得前面那个试图引用 \verb|RED| 常量的交通信号灯例子，第二个模式（\verb|pivot|）是一个会匹配任意值的捕获模式。因此，当 \verb|tree| 不是一个结构正确的元组时，代码就假定它是一个应当做相等性测试的叶子值。
+
+现在假设我的需求再次发生变化，我想用一个类而不是元组来表示二叉树中的节点（关于如何做这种选择，参见 Item 29（"组合类而非深度嵌套字典、列表和元组"））。这里我为节点定义了一个新类：
+
+\begin{codebox}[python]
+class Node:
+    def __init__(self, value, left=None, right=None):
+        self.value = value
+        self.left = left
+        self.right = right
+\end{codebox}
+
+我可以用这个类再创建一棵树实例。同样地，我只需提供叶子节点的值，而不必把它们包进额外的 \verb|Node| 对象里：
+
+\begin{codebox}[python]
+obj_tree = Node(
+    value=10,
+    left=Node(value=7, right=9),
+    right=Node(value=13, left=11),
+)
+\end{codebox}
+
+修改 \verb|contains| 函数的 \verb|if| 语句版本以处理 \verb|Node| 类是很直接的：
+
+\begin{codebox}[python]
+def contains_class(tree, value):
+    if not isinstance(tree, Node):
+        return tree == value
+    elif value < tree.value:
+        return contains_class(tree.left, value)
+    elif value > tree.value:
+        return contains_class(tree.right, value)
+    else:
+        return tree.value == value
+\end{codebox}
+
+得到的代码与之前使用三元素元组的版本同样复杂。在某些方面，这个类让函数更好（例如，访问对象属性而不是解包），而在另一些方面它让函数更糟（例如，重复的 \verb|tree.| 前缀）。
+
+我也可以把 \verb|contains| 函数的 \verb|match| 版本改造成使用 \verb|Node| 类：
+
+\begin{codebox}[python]
+def contains_match_class(tree, value):
+    match tree:
+        case Node(value=pivot, left=left) if value < pivot:
+            return contains_match_class(left, value)
+        case Node(value=pivot, right=right) if value > pivot:
+            return contains_match_class(right, value)
+        case Node(value=pivot) | pivot:
+            return pivot == value
+\end{codebox}
+
+它的工作方式是：每个 \verb|case| 子句都会隐式地做一次 \verb|isinstance| 检查，以测试 \verb|tree| 的值是否是一个 \verb|Node| 对象。然后它使用捕获模式（\verb|pivot|、\verb|left|、\verb|right|）提取对象的属性，类似于元组解构的工作方式。这些捕获变量可以在守卫表达式和 \verb|case| 块中使用，从而避免更啰嗦的属性访问（例如 \verb|tree.left|）。\verb|match| 所提供的能力与清晰度，对对象和对嵌套的内置数据结构同样有效。
+
+\subsection{半结构化数据与封装数据}
+
+当数据的结构与其解释相互解耦时，\verb|match| 也表现出色。例如，一个反序列化后的 JSON 对象不过是字典、列表、字符串和数字的嵌套组合（参见 Item 54（"考虑用 Mix-in 类组合功能"）的例子）。它缺乏由显式类层次结构所提供的那种清晰的责任封装（参见 Item 53（"用 super 初始化父类"））。但是，这些基础 JSON 类型被嵌套的方式——每一层上存在的键、值和元素——赋予了数据程序可以解读的语义含义。
+
+例如，假设我在编写计费软件，需要反序列化以 JSON 形式存储的客户记录。其中一些记录对应的是个人客户，另一些记录对应的是企业客户：
+
+\begin{codebox}[python]
+record1 = """{"customer": {"last": "Ross", "first": "Bob"}}"""
+record2 = """{"customer": {"entity": "Steve's Painting Co."}}"""
+\end{codebox}
+
+我想把这些信息记录转换成定义良好的 Python 对象，以便配合我程序的数据处理功能、UI 控件等一起使用（背景知识参见 Item 51（"优先使用 dataclass 定义轻量类"））：
+
+\begin{codebox}[python]
+from dataclasses import dataclass
+@dataclass
+class PersonCustomer:
+    first_name: str
+    last_name: str
+@dataclass
+class BusinessCustomer:
+    company_name: str
+\end{codebox}
+
+我可以使用 \verb|match| 语句来解读 JSON 数据内部的结构和取值，并将其映射到具体的 \verb|PersonCustomer| 和 \verb|BusinessCustomer| 类。这里用到了 \verb|match| 语句那套独特的语法，来配合捕获模式解构字典字面量：
+
+\begin{codebox}[python]
+import json
+def deserialize(data):
+    record = json.loads(data)
+    match record:
+        case {"customer": { "last": last_name,
+"first": first_name}}:
+            return PersonCustomer(first_name, last_name)
+        case {"customer": {"entity": company_name}}:
+            return BusinessCustomer(company_name)
+        case _:
+            raise ValueError("Unknown record type")
+\end{codebox}
+
+这个函数对上述定义的记录按预期工作，并生成了我所需要的对象：
+
+\begin{codebox}[python]
+print("Record1:", deserialize(record1))
+print("Record2:", deserialize(record2))
+>>>
+Record1: PersonCustomer(first_name='Bob', last_name='Ross')
+Record2: BusinessCustomer(company_name="Steve's Painting Co.")
+\end{codebox}
+
+这些例子仅仅让你浅尝了 \verb|match| 语句所能做到的事情。此外还支持集合模式、\verb|as| 模式、位置构造器模式（可通过 \verb|\_\_match\_args\_\_| 定制）、配合类型标注的穷尽性检查（参见 Item 124（"考虑通过 typing 进行静态分析以消除缺陷"））等等。鉴于其复杂性，最好参考官方教程（https://peps.python.org/pep-0636/）来确定如何在你的具体用例中运用 \verb|match|。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 尽管你可以用 \verb|match| 语句来替换简单的 \verb|if| 语句，但这样做容易出错。对于还不熟悉 \verb|match| 那些陷阱的 Python 程序员来说，\verb|case| 子句中捕获模式的结构化特性并不直观。
+\item \verb|match| 语句提供了一种简洁的语法，可以把 \verb|isinstance| 检查和解构行为与流程控制结合在一起。在处理异构对象图、解读半结构化数据的语义含义时，它们尤其有用。
+\item \verb|case| 模式可以有效地配合内置数据结构（例如列表、元组、字典）和用户自定义类使用，但每种类型都有各自不甚明显的独特语义。
+\end{itemize}

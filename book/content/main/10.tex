@@ -1,0 +1,1754 @@
+大量有用的 Python 代码，最初都诞生于一个为解决一次性问题而草草写就的脚本。随着这些脚本被扩展、改作他用并被复用，它们开始从短期、一次性的代码，演化成值得长期维护的庞然大物。
+
+一旦你写出了这样一段有用的 Python 程序，关键的下一步就是将它产品化（productionize），使之坚如磐石。让程序在遭遇意外状况时依然可靠，与让程序具备正确功能同等重要。Python 拥有内置的特性与模块，能帮助你加固程序，使其在各种情况下都稳健可靠。
+
+\section{Item 80: 充分利用 try/except/else/finally 的各个代码块}
+
+在 Python 中进行异常处理（exception handling）时，有四种不同的时机你可能想要执行操作：在 \texttt{try}、\texttt{except}、\texttt{else} 和 \texttt{finally} 代码块中。每个代码块在复合语句（compound statement）中都有独特的作用，而这些代码块的各种组合也很有用（另一个例子见 Item 121（「定义根 \texttt{Exception} 以隔离 API 调用方」））。
+
+\subsection{finally 代码块}
+
+当你既希望异常向上传播，又希望即使在发生异常时也运行清理代码时，使用 \texttt{try}/\texttt{finally}。\texttt{try}/\texttt{finally} 的一个常见用途是可靠地关闭文件句柄（另一种——可能更好的——做法见 Item 82（「考虑用 \texttt{contextlib} 和 \texttt{with} 语句实现可复用的 \texttt{try}/\texttt{finally} 行为」））：
+
+\begin{codebox}[python]
+def try_finally_example(filename):
+    print("* Opening file")
+    handle = open(filename, encoding="utf-8")  # 可能引发 OSError
+    try:
+        print("* Reading data")
+        return handle.read()                   # 可能引发 UnicodeDecodeError
+    finally:
+        print("* Calling close()")
+        handle.close()                         # 在 try 块之后总会执行
+\end{codebox}
+
+\texttt{read} 方法抛出的任何异常都会向上传播到调用代码，但 \texttt{finally} 块中 \texttt{handle} 的 \texttt{close} 方法会先运行：
+
+\begin{codebox}[python]
+filename = "random_data.txt"
+with open(filename, "wb") as f:
+    f.write(b"\xf1\xf2\xf3\xf4\xf5")  # 无效的 utf-8
+data = try_finally_example(filename)
+>>>
+* Opening file
+* Reading data
+* Calling close()
+Traceback ...
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf1 in
+'position 0: invalid continuation byte
+\end{codebox}
+
+你必须在 \texttt{try} 块之前调用 \texttt{open}，因为打开文件时发生的异常（例如文件不存在时的 \texttt{OSError}）应当完全跳过 \texttt{finally} 块：
+
+\begin{codebox}[python]
+try_finally_example("does_not_exist.txt")
+>>>
+* Opening file
+Traceback ...
+FileNotFoundError: [Errno 2] No such file or directory:
+''does_not_exist.txt'
+\end{codebox}
+
+\subsection{else 代码块}
+
+使用 \texttt{try}/\texttt{except}/\texttt{else} 可以清楚地表明哪些异常会被你的代码处理、哪些异常会向上传播。当 \texttt{try} 块没有抛出异常时，\texttt{else} 块就会运行。\texttt{else} 块有助于尽量减少 \texttt{try} 块中的代码量，这有利于隔离潜在的异常原因并提高可读性（参见 Item 83（「始终让 \texttt{try} 块尽可能短」））。例如，假设我想从一个字符串中加载 JSON 字典数据，并返回其中包含的某个键的值：
+
+\begin{codebox}[python]
+import json
+def load_json_key(data, key):
+    try:
+        print("* Loading JSON data")
+        result_dict = json.loads(data)  # 可能引发 ValueError
+    except ValueError:
+        print("* Handling ValueError")
+        raise KeyError(key)
+    else:
+        print("* Looking up key")
+        return result_dict[key]         # 可能引发 KeyError
+\end{codebox}
+
+在成功的情况下，JSON 数据在 \texttt{try} 块中被解码，随后键查找发生在 \texttt{else} 块中：
+
+\begin{codebox}[python]
+assert load_json_key('{"foo": "bar"}', "foo") == "bar"
+>>>
+* Loading JSON data
+* Looking up key
+\end{codebox}
+
+如果输入数据不是合法的 JSON，那么用 \texttt{json.loads} 解码时会抛出 \texttt{ValueError}。这个异常被 \texttt{except} 块捕获并处理：
+
+\begin{codebox}[python]
+load_json_key('{"foo": bad payload', "foo")
+>>>
+* Loading JSON data
+* Handling ValueError
+Traceback ...
+JSONDecodeError: Expecting value: line 1 column 9 (char 8)
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+KeyError: 'foo'
+\end{codebox}
+
+如果键查找抛出了任何异常，它们会向上传播到调用方，因为它们位于 \texttt{try} 块之外。\texttt{else} 子句确保 \texttt{try}/\texttt{except} 之后的代码在视觉上与 \texttt{except} 块区分开来。这就让异常的传播行为一目了然：
+
+\begin{codebox}[python]
+load_json_key('{"foo": "bar"}', "does not exist")
+>>>
+* Loading JSON data
+* Looking up key
+Traceback ...
+KeyError: 'does not exist'
+\end{codebox}
+
+\subsection{组合使用}
+
+当你想在一个复合语句中完成所有事情时，使用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally}。例如，假设我想从一个文件中读取一段待办工作的描述，对其进行处理，然后就地更新该文件。这里 \texttt{try} 块用于读取并处理文件，\texttt{except} 块用于处理 \texttt{try} 块中那些预期会发生的异常，\texttt{else} 块用于就地更新文件并让相关异常向上传播，而 \texttt{finally} 块则清理文件句柄：
+
+\begin{codebox}[python]
+UNDEFINED = object()
+def divide_json(path):
+    print("* Opening file")
+    handle = open(path, "r+")                       # 可能引发 OSError
+    try:
+        print("* Reading data")
+        data = handle.read()                        # 可能引发 UnicodeDecodeError
+        print("* Loading JSON data")
+        op = json.loads(data)                       # 可能引发 ValueError
+        print("* Performing calculation")
+        value = op["numerator"] / op["denominator"] # 可能引发 ZeroDivisionError
+    except ZeroDivisionError:
+        print("* Handling ZeroDivisionError")
+        return UNDEFINED
+    else:
+        print("* Writing calculation")
+        op["result"] = value
+        result = json.dumps(op)
+        handle.seek(0)                              # 可能引发 OSError
+        handle.write(result)                        # 可能引发 OSError
+        return value
+    finally:
+        print("* Calling close()")
+        handle.close()                              # 总会执行
+\end{codebox}
+
+在成功的情况下，\texttt{try}、\texttt{else} 和 \texttt{finally} 块都会运行：
+
+\begin{codebox}[python]
+temp_path = "random_data.json"
+with open(temp_path, "w") as f:
+    f.write('{"numerator": 1, "denominator": 10}')
+assert divide_json(temp_path) == 0.1
+>>>
+* Opening file
+* Reading data
+* Loading JSON data
+* Performing calculation
+* Writing calculation
+* Calling close()
+\end{codebox}
+
+如果计算无效，\texttt{try}、\texttt{except} 和 \texttt{finally} 块都会运行，但 \texttt{else} 块不会：
+
+\begin{codebox}[python]
+with open(temp_path, "w") as f:
+    f.write('{"numerator": 1, "denominator": 0}')
+assert divide_json(temp_path) is UNDEFINED
+>>>
+* Opening file
+* Reading data
+* Loading JSON data
+* Performing calculation
+* Handling ZeroDivisionError
+* Calling close()
+\end{codebox}
+
+如果 JSON 数据无效，\texttt{try} 块会运行并抛出异常，\texttt{finally} 块会运行，随后该异常向上传播到调用方。\texttt{except} 和 \texttt{else} 块都不会运行：
+
+\begin{codebox}[python]
+with open(temp_path, "w") as f:
+    f.write('{"numerator": 1 bad data')
+divide_json(temp_path)
+>>>
+* Opening file
+* Reading data
+* Loading JSON data
+* Calling close()
+Traceback ...
+JSONDecodeError: Expecting ',' delimiter: line 1 column 17
+'(char 16)
+\end{codebox}
+
+这种布局尤其有用，因为所有代码块都能以直观的方式协同工作。例如，这里我通过在硬盘空间耗尽的同时运行 \texttt{divide\_json} 函数来模拟这种情况：
+
+\begin{codebox}[python]
+with open(temp_path, "w") as f:
+    f.write('{"numerator": 1, "denominator": 10}')
+divide_json(temp_path)
+>>>
+* Opening file
+* Reading data
+* Loading JSON data
+* Performing calculation
+* Writing calculation
+* Calling close()
+Traceback ...
+OSError: [Errno 28] No space left on device
+\end{codebox}
+
+当异常在 \texttt{else} 块重写结果数据时抛出，\texttt{finally} 块仍然会运行，并按预期关闭了文件句柄。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{try}/\texttt{finally} 复合语句让你无论 \texttt{try} 块中是否抛出异常，都能运行清理代码。
+\item \texttt{else} 块有助于尽量减少 \texttt{try} 块中的代码量，并在视觉上将成功的情况与 \texttt{try}/\texttt{except} 块区分开来。
+\item \texttt{else} 块可用于在成功的 \texttt{try} 块之后、但在 \texttt{finally} 块进行通用清理之前，执行额外的操作。
+\end{itemize}
+
+\section{Item 81: 用 assert 校验内部假设，用 raise 上报未达预期}
+
+Python 提供了 \texttt{assert} 语句，当给定的表达式为假值（falsey value）时，它会在运行时引发 \texttt{AssertionError} 异常（相关背景见 Item 7（「考虑用条件表达式处理简单的内联逻辑」））。例如，这里我尝试验证两个列表都不为空，而第二个断言会失败，因为该表达式不是真值（truthy value）：
+
+\begin{codebox}[python]
+list_a = [1, 2, 3]
+assert list_a, "a empty"
+list_b = []
+assert list_b, "b empty"  # 会引发异常
+>>>
+Traceback ...
+AssertionError: b empty
+\end{codebox}
+
+Python 还提供了 \texttt{raise} 语句，用于向调用方上报异常情况（何时使用见 Item 32（「优先引发异常而非返回 \texttt{None}」））。这里我使用 \texttt{raise} 配合 \texttt{if} 语句来上报同类型的空列表问题：
+
+\begin{codebox}[python]
+class EmptyError(Exception):
+    pass
+list_c = []
+if not list_c:
+    raise EmptyError("c empty")
+>>>
+Traceback ...
+EmptyError: c empty
+\end{codebox}
+
+\texttt{raise} 语句引发的异常可以用 \texttt{try}/\texttt{except} 语句捕获（参见 Item 80（「充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 的各个代码块」））。这种另类的控制流正是 \texttt{raise} 的主要用途：
+
+\begin{codebox}[python]
+try:
+    raise EmptyError("From raise statement")
+except EmptyError as e:
+    print(f"Caught: {e}")
+>>>
+Caught: From raise statement
+\end{codebox}
+
+但在运行时，也可以捕获 \texttt{assert} 语句引发的异常：
+
+\begin{codebox}[python]
+try:
+    assert False, "From assert statement"
+except AssertionError as e:
+    print(f"Caught: {e}")
+>>>
+Caught: From assert statement
+\end{codebox}
+
+为什么 Python 要提供两种（\texttt{raise} 和 \texttt{assert}）不同的方式来上报异常情况呢？原因在于它们各自扮演不同的角色。
+
+由 \texttt{raise} 语句引发的异常被视为函数接口的一部分，就像参数和返回值一样。这些异常本意就是被调用代码捕获并相应地处理。一个函数可能引发的异常应当写进文档（参见 Item 118（「为每个函数、类和模块编写文档字符串（docstring）」）），以便调用方知道可能需要处理它们。这些 \texttt{raise} 语句的行为也应当在自动化测试中得到验证（参见 Item 109（「优先编写集成测试而非单元测试」））。
+
+由 \texttt{assert} 语句引发的异常并非供函数的调用方捕获。它们用于验证实现中的某些假设，而这些假设对新阅读代码的人来说可能并不明显。断言是自文档化的，因为它会对第二个表达式（逗号之后的部分）求值，从而在条件失败时生成一条调试用的错误消息。这些消息可以被调用栈（call stack）中更上层的错误上报与日志设施所利用，帮助开发者发现和修复缺陷（例子见 Item 87（「使用 \texttt{traceback} 增强异常上报」））。
+
+实现相同功能的代码，视上下文不同，可能使用 \texttt{assert} 语句、\texttt{raise} 语句，或两者都用。例如，这里我定义一个简单的类，用来聚合电影评分。它提供了一个健壮的 API，用于校验输入并使用 \texttt{raise} 向调用方报告任何问题：
+
+\begin{codebox}[python]
+class RatingError(Exception):
+    ...
+class Rating:
+    def __init__(self, max_rating):
+        if not (max_rating > 0):
+            raise RatingError("Invalid max_rating")
+        self.max_rating = max_rating
+        self.ratings = []
+    def rate(self, rating):
+        if not (0 < rating <= self.max_rating):
+            raise RatingError("Invalid rating")
+        self.ratings.append(rating)
+\end{codebox}
+
+这个类所引发的异常本意是被捕获，并且大概会被回传给发送了无效输入的最终用户或 API 调用方：
+
+\begin{codebox}[python]
+movie = Rating(5)
+movie.rate(5)
+movie.rate(7)  # 会引发异常
+>>>
+Traceback ...
+RatingError: Invalid rating
+\end{codebox}
+
+下面是同一功能另一种实现，但这个版本并非用于向调用方报告错误。相反，这个类假设程序的其他部分已经完成了必要的校验：
+
+\begin{codebox}[python]
+class RatingInternal:
+    def __init__(self, max_rating):
+        assert max_rating > 0, f"Invalid {max_rating=}"
+        self.max_rating = max_rating
+        self.ratings = []
+    def rate(self, rating):
+         assert 0 < rating <= self.max_rating, \
+    f"Invalid {rating=}"
+        self.ratings.append(rating)
+\end{codebox}
+
+当这个类中的 \texttt{assert} 语句抛出异常时，它意在报告代码中的一个缺陷。这条消息应当包含程序员日后可以用来找出原因并加以修复的信息：
+
+\begin{codebox}[python]
+movie = RatingInternal(5)
+movie.rate(5)
+movie.rate(7)  # 会引发异常
+>>>
+Traceback ...
+AssertionError: Invalid rating=7
+\end{codebox}
+
+要让这样的断言发挥作用，关键在于调用代码不要捕获并静默掉 \texttt{AssertionError} 或 \texttt{Exception} 异常（参见 Item 85（「当心捕获 \texttt{Exception} 类」））。
+
+归根结底，由你来决定 \texttt{raise} 还是 \texttt{assert} 最为合适。随着 Python 程序复杂度的增长，相互关联的函数、类和模块这些层次开始成形。其中一些系统更偏向对外开放的 API：即那些供其他组件利用的库函数和接口。在那些情况下，\texttt{raise} 最为有用（参见 Item 121（「定义根 \texttt{Exception} 以隔离 API 调用方」））。另一些代码则偏向内部，用于帮助程序的某一部分实现更大的需求。在那些情况下，\texttt{assert} 才是正确选择；只要确保你没有禁用断言即可（参见 Item 90（「绝不要把 \texttt{\_\_debug\_\_} 设为 \texttt{False}」））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{raise} 语句可用于向函数的调用方上报预期的错误情况。
+\item 一个函数直接引发的异常是其显式接口的一部分，应当相应地写进文档。
+\item \texttt{assert} 语句应当用于验证程序员在代码中的假设，并把它们传递给实现的其他阅读者。
+\item 失败的断言并非函数显式接口的一部分，调用方不应捕获它们。
+\end{itemize}
+
+\section{Item 82: 考虑用 contextlib 和 with 语句实现可复用的 try/finally 行为}
+
+Python 中的 \texttt{with} 语句用于表明代码运行在特殊的上下文中。例如，互斥锁（mutual-exclusion lock，参见 Item 69「用 \texttt{Lock} 防止线程中的数据竞争」）可以在 \texttt{with} 语句中使用，以表明缩进的代码块只在持有该锁时才运行：
+
+\begin{codebox}[python]
+from threading import Lock
+lock = Lock()
+with lock:
+    # Do something while maintaining an invariant
+    # 在保持不变量时做一些事情
+    ...
+\end{codebox}
+
+上面的例子等价于这个 \texttt{try}/\texttt{finally} 结构（参见 Item 80「充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的各个代码块」），因为 \texttt{Lock} 类正确地支持在 \texttt{with} 语句中使用：
+
+\begin{codebox}[python]
+lock.acquire()
+try:
+    # Do something while maintaining an invariant
+    # 在保持不变量时做一些事情
+    ...
+finally:
+    lock.release()
+\end{codebox}
+
+这种 \texttt{with} 语句的写法更好，因为它省去了编写 \texttt{try}/\texttt{finally} 复合语句那种重复代码的需要，从而确保你不会忘记为每一次 \texttt{acquire} 调用都配上相应的 \texttt{release} 调用。
+
+借助内置（built-in）模块 \texttt{contextlib}，很容易让你的对象和函数支持在 \texttt{with} 语句中使用。该模块包含 \texttt{contextmanager} 装饰器（decorator，背景见 Item 38「用 \texttt{functools.wraps} 定义函数装饰器」），它让一个普通函数也能用于 \texttt{with} 语句。这比定义一个带有特殊方法 \texttt{\_\_enter\_\_} 和 \texttt{\_\_exit\_\_} 的新类（标准的面向对象做法）要容易得多。
+
+例如，假设我希望某段代码在某些情况下输出更多调试日志。这里我定义一个函数，以两种严重级别记录日志：
+
+\begin{codebox}[python]
+import logging
+def my_function():
+    logging.debug("Some debug data")
+    logging.error("Error log here")
+    logging.debug("More debug data")
+\end{codebox}
+
+我的程序的默认日志级别是 \texttt{WARNING}，因此运行该函数时，只有 \texttt{logging.error} 的消息会打印到屏幕：
+
+\begin{codebox}[python]
+my_function()
+>>>
+Error log here
+\end{codebox}
+
+通过定义一个上下文管理器（context manager），我可以临时提高这个函数的日志级别。这个辅助函数在运行 \texttt{with} 块中的代码之前提高日志严重级别，之后再把级别降回来：
+
+\begin{codebox}[python]
+from contextlib import contextmanager
+@contextmanager
+def debug_logging(level):
+    logger = logging.getLogger()
+    old_level = logger.getEffectiveLevel()
+    logger.setLevel(level)
+    try:
+        yield
+    finally:
+        logger.setLevel(old_level)
+\end{codebox}
+
+\texttt{yield} 表达式就是 \texttt{with} 块中的内容将要执行的地方（背景见 Item 43「考虑用生成器（generator）代替返回列表」）。在 \texttt{with} 块中发生的任何异常都会由 \texttt{yield} 表达式重新抛出，以便你在辅助函数中捕获（其工作原理见 Item 47「用类管理迭代状态转换，而非用生成器的 \texttt{throw} 方法」）。
+
+现在我可以在 \texttt{debug\_logging} 上下文中再次调用同一个日志函数。这一次，所有调试消息都会在 \texttt{with} 块中打印到屏幕。而在 \texttt{with} 块之外运行同一个函数则不会打印调试消息：
+
+\begin{codebox}[python]
+with debug_logging(logging.DEBUG):
+    print("* Inside:")
+    my_function()
+print("* After:")
+my_function()
+>>>
+* Inside:
+Some debug data
+Error log here
+More debug data
+* After:
+Error log here
+\end{codebox}
+
+\subsection{作为 as 目标}
+
+传给 \texttt{with} 语句的上下文管理器也可以返回一个对象。该对象会被赋值给复合语句中 \texttt{as} 部分的局部变量。这让运行在 \texttt{with} 块中的代码能够直接与它的上下文交互（另一个例子见 Item 76「了解如何将线程式 I/O 移植到 \texttt{asyncio}」）。
+
+例如，假设我想写入一个文件并确保它总是被正确关闭。我可以通过将 \texttt{open} 传给 \texttt{with} 语句来实现。\texttt{open} 会返回一个文件句柄（file handle），作为 \texttt{with} 的 \texttt{as} 目标，并在 \texttt{with} 块退出时关闭该句柄：
+
+\begin{codebox}[python]
+with open("my_output.txt", "w") as handle:
+    handle.write("This is some data!")
+\end{codebox}
+
+使用 \texttt{with} 的做法比用 \texttt{try}/\texttt{finally} 复合语句手动打开和关闭文件句柄更 Pythonic（地道 Python 写法）：
+
+\begin{codebox}[python]
+handle = open("my_output.txt", "w")
+try:
+    handle.write("This is some data!")
+finally:
+    handle.close()
+\end{codebox}
+
+使用 \texttt{as} 目标还能让你确信：当执行离开 \texttt{with} 语句时，文件最终会被关闭。通过突出关键区段，它还会促使你减少在文件句柄打开期间执行的代码量，而这一般来说是良好的实践。
+
+要让你的函数也能为 \texttt{as} 目标提供值，只需要在你的上下文管理器中 yield 一个值即可。例如，这里我定义一个上下文管理器来获取一个 \texttt{Logger} 实例、设置其级别，然后将其 yield 出来作为 \texttt{as} 目标：
+
+\begin{codebox}[python]
+@contextmanager
+def log_level(level, name):
+    logger = logging.getLogger(name)
+    old_level = logger.getEffectiveLevel()
+    logger.setLevel(level)
+    try:
+        yield logger
+    finally:
+        logger.setLevel(old_level)
+\end{codebox}
+
+在 \texttt{as} 目标上调用 \texttt{debug} 之类的日志方法会产生输出，因为在 \texttt{with} 块中，那个特定 \texttt{Logger} 实例的日志严重级别被设得足够低。直接使用 \texttt{logging} 模块则不会打印任何内容，因为默认的程序日志器的默认日志严重级别是 \texttt{WARNING}：
+
+\begin{codebox}[python]
+with log_level(logging.DEBUG, "my-log") as my_logger:
+    my_logger.debug(f"This is a message for {my_logger.name}!")
+    logging.debug("This will not print")
+>>>
+This is a message for my-log!
+\end{codebox}
+
+在 \texttt{with} 语句退出之后，对名为 \texttt{"my-log"} 的 \texttt{Logger} 调用调试日志方法将不会打印任何内容，因为默认的日志严重级别已被自动恢复。错误日志消息则始终会打印：
+
+\begin{codebox}[python]
+logger = logging.getLogger("my-log")
+logger.debug("Debug will not print")
+logger.error("Error will print")
+>>>
+Error will print
+\end{codebox}
+
+之后，我只需更新 \texttt{with} 语句，就能改变想要使用的日志器的名称。这会把 \texttt{with} 块中作为 \texttt{as} 目标的 \texttt{Logger} 对象指向另一个实例，但我无需为了匹配而去修改其他任何代码：
+
+\begin{codebox}[python]
+with log_level(logging.DEBUG, "other-log") as my_logger:# Changed
+    # 已修改
+    my_logger.debug(f"This is a message for {my_logger.name}!")
+    logging.debug("This will not print")
+>>>
+This is a message for other-log!
+\end{codebox}
+
+这种状态的隔离，以及在创建上下文与在该上下文中行动之间的解耦，是 \texttt{with} 语句的另一项好处。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{with} 语句让你可以复用 \texttt{try}/\texttt{finally} 代码块中的逻辑，并减少视觉噪音（visual noise）。
+\item 内置模块 \texttt{contextlib} 提供了 \texttt{contextmanager} 装饰器，让你很容易把自己的函数用于 \texttt{with} 语句。
+\item 上下文管理器 yield 的值会提供给 \texttt{with} 语句的 \texttt{as} 部分。它很有用，能让你的代码直接访问这个特殊上下文的成因。
+\end{itemize}
+
+\section{Item 83: 始终让 try 代码块尽可能短}
+
+在处理一个预期的异常（expected exception）时，要把各种语句块都正确搭建起来，开销相当可观（参见 Item 80「充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的各个代码块」）。例如，假设我想通过某个连接发起一次远程过程调用（remote procedure call，RPC），而这可能会遇到错误：
+
+\begin{codebox}[python]
+connection = ...
+class RpcError(Exception):
+    ...
+def lookup_request(connection):
+    ...
+    raise RpcError("From lookup_request")
+def close_connection(connection):
+    ...
+    print("Connection closed")
+try:
+    request = lookup_request(connection)
+except RpcError:
+    print("Encountered error!")
+    close_connection(connection)
+>>>
+Error!
+Connection closed
+\end{codebox}
+
+再往后，假设我想对 \texttt{try} 块中收集到的数据做更多处理，或者处理一些特殊情况。最简单、最自然的做法就是在需要的地方直接添加代码。这里我把上面的例子改一下，增加一个快速路径来检查缓存的响应，以避免额外的处理：
+
+\begin{codebox}[python]
+def lookup_request(connection):
+    # No error raised
+    # 不会抛出异常
+    ...
+def is_cached(connection, request):
+    ...
+    raise RpcError("From is_cached")
+try:
+    request = lookup_request(connection)
+    if is_cached(connection, request):
+        request = None
+except RpcError:
+    print("Encountered error!")
+    close_connection(connection)
+>>>
+Connection closed
+\end{codebox}
+
+问题在于，\texttt{is\_cached} 函数也可能抛出 \texttt{RpcError} 异常。由于是在同一个 \texttt{try}/\texttt{except} 语句中调用 \texttt{lookup\_request} 和 \texttt{is\_cached}，在后续的代码中，我无法分辨到底是这两个函数中的哪一个真正抛出了错误并导致连接被关闭：
+
+\begin{codebox}[python]
+if is_closed(connection):
+    # Was the connection closed because of an error
+    # 连接是因为 lookup_request 还是 is_cached 中的错误而关闭的？
+    # in lookup_request or is_cached?
+    ...
+\end{codebox}
+
+相反，你应当做的是：在每个 \texttt{try} 块中只放一个预期错误的来源。其余的代码要么放进与之关联的 \texttt{else} 块，要么放进一个独立的后续 \texttt{try} 语句：
+
+\begin{codebox}[python]
+try:
+    request = lookup_request(connection)
+except RpcError:
+    close_connection(connection)
+else:
+    if is_cached(connection, request):  # Moved
+        # 已移动
+        request = None
+>>>
+Traceback ...
+RpcError: From is_cached
+\end{codebox}
+
+这种做法能确保那些你没有预期到的异常（例如可能由 \texttt{is\_cached} 抛出的异常）会沿着你的调用栈（call stack）向上冒泡，并产生可供你日后查找、调试和修复的错误信息。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在 \texttt{try} 块中放入过多代码，可能导致你的程序捕获到本不打算处理的异常。
+\item 与其扩大 \texttt{try} 块，不如把额外的代码放进紧随其后的 \texttt{else} 块，或者放进一个完全独立的 \texttt{try} 语句。
+\end{itemize}
+
+\section{Item 84: 当心异常变量消失}
+
+与 \texttt{for} 循环变量（参见 Item 20「循环结束后绝不要使用 \texttt{for} 循环变量」）不同，异常变量在 \texttt{except} 块之后的那一行中是无法访问的：
+
+\begin{codebox}[python]
+try:
+    raise MyError(123)
+except MyError as e:
+    print(f"Inside {e=}")
+print(f"Outside {e=}")  # Raises
+# 会抛出异常
+>>>
+Inside e=MyError(123)
+Traceback ...
+NameError: name 'e' is not defined
+\end{codebox}
+
+你或许会以为，作为异常处理机制一部分的 \texttt{finally} 块在其作用域内应该还能访问到这个异常变量（参见 Item 80「充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的各个代码块」）。遗憾的是，事实并非如此：
+
+\begin{codebox}[python]
+try:
+    raise MyError(123)
+except MyError as e:
+    print(f"Inside {e=}")
+finally:
+    print(f"Finally {e=}")  # Raises
+# 会抛出异常
+>>>
+Inside e=MyError(123)
+Traceback ...
+NameError: name 'e' is not defined
+\end{codebox}
+
+有时，把 \texttt{try} 语句每个可能结果分支的结果保存下来会很有用。例如，假设我想记录每个分支的结果以便调试。为此，我需要创建一个新变量，并在每个分支中给它赋值：
+
+\begin{codebox}[python]
+result = "Unexpected exception"
+try:
+    raise MyError(123)
+except MyError as e:
+    result = e
+except OtherError as e:
+    result = e
+else:
+    result = "Success"
+finally:
+    print(f"Log {result=}")
+>>>
+Log result=MyError(123)
+\end{codebox}
+
+值得注意的是，上面例子中 \texttt{result} 变量甚至在 \texttt{try} 块之前就已经被赋值。这是必要的，以便应对那种抛出的异常没有被任何 \texttt{except} 子句覆盖的情况。如果你不预先给 \texttt{result} 赋值，那么抛出的将是一个运行时错误，而不是你原本的那个错误：
+
+\begin{codebox}[python]
+try:
+    raise OtherError(123)  # Not handled
+    # 未处理
+except MyError as e:
+    result = e
+else:
+    result = "Success"
+finally:
+    print(f"{result=}")    # Raises
+    # 会抛出异常
+>>>
+Traceback ...
+OtherError: 123
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+NameError: name 'result' is not defined
+\end{codebox}
+
+这说明了 Python 在变量的作用域（scope）绑定到函数方面并不总是一致。在 \texttt{except} 块、生成器表达式（generator expression）、列表推导式（list comprehension）或 \texttt{for} 循环中，变量的生命周期可能和你预期的不同（相关例子见 Item 42「用赋值表达式减少推导式中的重复」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 由 \texttt{except} 语句赋值的异常变量，只能在其对应的 \texttt{except} 块内部访问。
+\item 若要在外围作用域或后续的 \texttt{finally} 块中访问被捕获的异常实例（Exception instance），你必须把它赋值给另一个变量名。
+\end{itemize}
+
+\section{Item 85: 当心捕获 Exception 类}
+
+程序中的错误——既有预料之中的，也有预料之外的——经常发生。这类问题是开发软件时程序员必须接受并设法缓解的一个方面。例如，假设我想分析一家披萨餐厅的销售情况并生成每日汇总报告。在这里，我用一个由多个函数组成的简单流水线（pipeline）来实现：
+
+\begin{codebox}[python]
+def load_data(path):
+    ...
+def analyze_data(data):
+    ...
+def run_report(path):
+    data = load_data(path)
+    summary = analyze(data)
+    return summary
+\end{codebox}
+
+如果能随时拿到最新的汇总会很有用，因此我会每 5 分钟定时调用一次 \texttt{run\_report} 函数。不过，有时会出现瞬时错误（transient error），例如在每天餐厅开门之前，当日文件里还没有任何交易记录时：
+
+\begin{codebox}[python]
+summary = run_report("pizza_data-2024-01-28.csv")
+print(summary)
+>>>
+Traceback ...
+FileNotFoundError: [Errno 2] No such file or directory:
+'pizza_data-2024-01-28.csv'
+\end{codebox}
+
+通常，我会用一条 \texttt{try}/\texttt{except} 语句把对 \texttt{run\_report} 的调用包起来，并在控制台打印一条失败消息来解决这个问题（详见 Item 80：充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的每个代码块）：
+
+\begin{codebox}[python]
+try:
+    summary = run_report("pizza_data.csv")
+except FileNotFoundError:
+    print("Transient file error")
+else:
+    print(summary)
+>>>
+Transient file error
+\end{codebox}
+
+这能避免一类问题，但流水线可能抛出许多我没有预料到的其他类型的瞬时异常（transient exception）。我希望避免任何间歇性错误使运行这份报告的餐厅销售点（point-of-sale）程序的其余部分崩溃。相比定期刷新报告，更重要的是让交易能够持续得到处理。
+
+把系统其余部分与故障隔离开的一种方法是，捕获更宽泛的 \texttt{Exception} 父类，而不是更具体的 \texttt{FileNotFoundError} 类：
+
+\begin{codebox}[python]
+try:
+    summary = run_report("pizza_data.csv")
+except Exception:  # Changed
+    print("Transient report issue")
+else:
+    print(summary)
+>>>
+Transient report issue
+\end{codebox}
+
+当抛出异常（exception）时，各个 \texttt{except} 子句会按先后顺序被考察。如果异常值的类型是子句所指定类的子类，那么相应的错误处理代码就会被执行。通过提供 \texttt{Exception} 类来匹配，我就能捕获任何种类的错误，因为它们都继承自这个父类。
+
+遗憾的是，这种做法有一个大问题：\texttt{try}/\texttt{except} 语句可能会让我无法注意到代码中真实存在的问题。一旦披萨餐厅开门、数据文件确实已经存在，\texttt{run\_report} 函数竟然仍然会失败。原因是在 \texttt{run\_report} 最初的定义里有一个拼写错误，它调用了并不存在的 \texttt{analyze} 函数，而不是正确的 \texttt{analyze\_data} 函数：
+
+\begin{codebox}[python]
+run_report("my_data.csv")
+>>>
+Traceback ...
+NameError: name 'analyze' is not defined
+\end{codebox}
+
+由于 Python 高度动态（dynamic）的特性，解释器（interpreter）只会在运行时刻才发现这个函数缺失，而不会在程序首次加载时就发现（详见 Item 3：永远不要指望 Python 在编译期发现错误）。解释器会抛出一个 \texttt{NameError}，而它是 \texttt{Exception} 类的子类。因此，相应的 \texttt{except} 子句会捕获这个异常，并把它当作瞬时错误报告，尽管它其实是一个严重的问题。
+
+缓解这一问题的一种办法是，在匹配 \texttt{Exception} 类时，始终打印或记录被捕获的异常（exception）。至少这样，所收到错误的细节才会可见；任何查看控制台输出的人都可能注意到程序中确实存在一个 bug。例如，在这里我把异常值及其类型都打印出来，以清楚地表明到底哪里出了问题：
+
+\begin{codebox}[python]
+try:
+    summary = run_report("my_data.csv")
+except Exception as e:
+    print("Fail:", type(e), e)
+else:
+    print(summary)
+>>>
+Fail: <class 'NameError'> name 'analyze' is not defined
+\end{codebox}
+
+过于宽泛的异常处理还会以其他方式引发问题，同样值得了解（详见 Item 86：理解 \texttt{Exception} 与 \texttt{BaseException} 的区别，以及 Item 89：始终向生成器传入资源，并让调用方在外部清理它们）。此外，对于显式的 API，还有一些更健壮的方式来报告和处理错误，从而帮助避免这些问题（详见 Item 121：定义根异常（root exception）以将调用方与 API 隔离）。
+
+通过捕获异常（exception）来隔离错误可能很有用，但你需要确保自己没有在无意中把问题隐藏起来。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在 \texttt{except} 子句中使用 \texttt{Exception} 类，有助于把程序的某个部分与其余部分隔离开来。
+\item 捕获宽泛类别的异常，可能导致你的代码去处理你本不打算处理的错误，从而在不经意间把问题隐藏起来。
+\item 在使用宽泛的异常处理程序时，打印或以其他方式记录所遇到的任何错误十分重要，这样才能让人看清真正发生了什么。
+\end{itemize}
+
+\section{Item 86: 理解 Exception 与 BaseException 的区别}
+
+Python 文档会告诉你，程序员自定义的异常（exception）类必须继承自 \texttt{Exception} 类。但 Python 中异常树的真正根其实是 \texttt{BaseException}，它是 \texttt{Exception} 的父类。还有一些其他的异常类从 \texttt{BaseException} 分叉出来，Python 将它们用于自身的内部目的。
+
+例如，当用户在 Python 程序运行期间按下 Control-C 键组合时，他们期望中断正在运行的程序并使其终止。Python 实现这一点的具体方式依赖于平台，但归根结底，解释器（interpreter）运行时会把中断信号转换为 \texttt{KeyboardInterrupt} 异常，并在程序的主线程中将其抛出。\texttt{KeyboardInterrupt} 并不继承自 \texttt{Exception}，这意味着它会一路绕过异常处理器，直达程序的入口点，并导致程序带着一条错误消息退出。下面我通过退出一个无限循环来演示这一行为，尽管该循环捕获的是 \texttt{Exception} 类：
+
+\begin{codebox}[python]
+def do_processing():
+    ...
+def main(argv):
+    while True:
+        try:
+            do_processing()  # 被中断
+        except Exception as e:
+            print("Error:", type(e), e)
+    return 0
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+>>>
+Traceback ...
+KeyboardInterrupt
+\end{codebox}
+
+既然知道这是可能的，我可能会选择捕获 \texttt{BaseException} 类，以便在程序终止前总能做清理工作，例如把已打开的文件刷新到磁盘，确保它们不会被损坏。在其他情况下，捕获这样宽泛的异常类对于让组件免受潜在错误影响、提供健壮的 API 也很有用（参见 Item 85「当心捕获 \texttt{Exception} 类」以及 Item 121「定义根异常（root exception）以隔离 API 调用方」）。我可以在异常处理器的末尾返回 \texttt{1}，以表示程序应当带着错误码退出：
+
+\begin{codebox}[python]
+def do_processing(handle):
+    ...
+def main(argv):
+    data_path = argv[1]
+    handle = open(data_path, "w+")
+    while True:
+        try:
+            do_processing(handle)
+        except Exception as e:
+            print("Error:", type(e), e)
+        except BaseException:
+            print("Cleaning up interrupt")
+            handle.flush()
+            handle.close()
+            return 1
+    return 0
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+>>>
+Cleaning up interrupt
+Traceback ...
+SystemExit: 1
+\end{codebox}
+
+问题在于，还有其他异常类型同样继承自 \texttt{BaseException}，包括 \texttt{SystemExit}（由内置（built-in）函数 \texttt{sys.exit} 引发）和 \texttt{GeneratorExit}（参见 Item 89「总是把资源传入生成器（generator），并让调用方在外部清理」）。Python 未来可能还会增加更多。Python 把这些异常当作执行预期行为的机制，而非报告错误状况，这正是它们位于类层次结构（class hierarchy）中独立部分的原因。运行时要依赖用户通常不会捕获这些异常才能正常工作；如果你捕获了它们，就可能在程序中无意间造成有害的副作用。
+
+因此，如果你想实现这类清理行为，更好的做法是使用像 \texttt{try}/\texttt{finally} 语句（参见 Item 80「充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的每个代码块」）和 \texttt{with} 语句（参见 Item 82「考虑用 \texttt{contextlib} 与 \texttt{with} 语句实现可复用的 \texttt{try}/\texttt{finally} 行为」）这样的结构。这些结构会确保清理方法无论抛出的异常是继承自 \texttt{Exception} 还是 \texttt{BaseException} 都会运行：
+
+\begin{codebox}[python]
+def main(argv):
+    data_path = argv[1]
+    handle = open(data_path, "w+")
+    try:
+        while True:
+            try:
+                do_processing(handle)
+            except Exception as e:
+                print("Error:", type(e), e)
+    finally:
+        print("Cleaning up finally")  # 总是会运行
+        handle.flush()
+        handle.close()
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+>>>
+Cleaning up finally
+Traceback ...
+KeyboardInterrupt
+\end{codebox}
+
+如果出于某些原因你确实必须捕获并处理 \texttt{BaseException} 的直接子类，那么正确地传播错误就很重要，这样调用栈（call stack）中更上层的其他代码仍然能收到它。例如，我可能会捕获 \texttt{KeyboardInterrupt} 异常，并请用户确认是否真的要终止程序。这里我在异常处理器的末尾使用一个裸露的（bare）\texttt{raise}，以确保异常能够正常继续传播，且不修改其回溯（traceback）（参见 Item 87「使用 \texttt{traceback} 增强异常报告」了解背景）：
+
+\begin{codebox}[python]
+def main(argv):
+    while True:
+        try:
+            do_processing()
+        except Exception as e:
+            print("Error:", type(e), e)
+        except KeyboardInterrupt:
+            found = input("Terminate? [y/n]: ")
+            if found == "y":
+                raise  # 传播错误
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+>>>
+Terminate? [y/n]: y
+Traceback ...
+KeyboardInterrupt
+\end{codebox}
+
+另一个你可能决定捕获 \texttt{BaseException} 的情形是增强型日志工具（参见 Item 87「使用 \texttt{traceback} 增强异常报告」了解相关用例）。例如，我可以定义一个函数装饰器（decorator），它会记录所有输入和输出，包括被抛出的 \texttt{Exception} 子类值（参见 Item 38「用 \texttt{functools.wraps} 定义函数装饰器」了解背景）：
+
+\begin{codebox}[python]
+import functools
+def log(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            result = e
+            raise
+        finally:
+            print(
+                f"Called {func.__name__}"
+                f"(*{args!r}, **{kwargs!r}) "
+                f"got {result!r}"
+            )
+    return wrapper
+\end{codebox}
+
+调用被 \texttt{log} 装饰的函数会如预期那样打印出所有内容：
+
+\begin{codebox}[python]
+@log
+def my_func(x):
+    x / 0
+my_func(123)
+>>>
+Called my_func(*(123,), **{}) got ZeroDivisionError(
+''division by zero')
+Traceback ...
+ZeroDivisionError: division by zero
+\end{codebox}
+
+然而，如果抛出的异常继承自 \texttt{BaseException} 而非 \texttt{Exception}，这个装饰器就会失效并引发意料之外的错误：
+
+\begin{codebox}[python]
+@log
+def other_func(x):
+    if x > 0:
+        sys.exit(1)
+other_func(456)
+>>>
+Traceback ...
+SystemExit: 1
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+UnboundLocalError: cannot access local variable 'result'
+'where it is not associated with a value
+\end{codebox}
+
+这看似有违直觉，但 \texttt{finally} 子句即使在没有 \texttt{except} 子句、或所提供的 \texttt{except} 子句都没有真正匹配被抛出异常值的情况下也会运行（参见 Item 84「当心异常变量消失」了解另一个例子）。在上面这个例子中，发生的事情正是如此：\texttt{SystemExit} 不是 \texttt{Exception} 的子类，因此那个处理器从未运行，于是在 \texttt{finally} 子句里调用 \texttt{print} 之前，\texttt{result} 从未被赋值。简单地把捕获 \texttt{Exception} 改成捕获 \texttt{BaseException} 就能解决问题：
+
+\begin{codebox}[python]
+def fixed_log(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            result = func(*args, **kwargs)
+        except BaseException as e:  # 已修正
+            result = e
+            raise
+        finally:
+            print(
+                f"Called {func.__name__}"
+                f"(*{args!r}, **{kwargs!r}) "
+                f"got {result!r}"
+            )
+    return wrapper
+\end{codebox}
+
+现在，这个装饰器对 \texttt{SystemExit} 也能按预期工作了：
+
+\begin{codebox}[python]
+@fixed_log
+def other_func(x):
+    if x > 0:
+        sys.exit(1)
+other_func(456)
+>>>
+Called other_func(*(456,), **{}) got SystemExit(1)
+Traceback ...
+SystemExit: 1
+\end{codebox}
+
+处理 \texttt{BaseException} 及其相关类可能很有用，但也相当棘手，因此密切关注细节、小心谨慎十分重要。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 对于内部行为，Python 有时会抛出 \texttt{BaseException} 的子类，它们会跳过只处理 \texttt{Exception} 基类的 \texttt{except} 子句。
+\item \texttt{try}/\texttt{finally} 语句、\texttt{with} 语句以及类似的结构无需额外工作，就能正确处理被抛出的 \texttt{BaseException} 子类。
+\item 捕获 \texttt{BaseException} 及其相关类是存在合理理由的，但这样做容易出错。
+\end{itemize}
+
+\section{Item 87: 使用 traceback 增强异常报告}
+
+当 Python 程序遇到问题时，通常会引发一个异常（exception）。如果该异常没有被捕获和处理（参见 Item 80（"充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的各个语句块"）），它就会一路向上传播到程序的入口点，并以错误码退出。Python 解释器还会打印出格式工整的调用栈（stack trace）或回溯（traceback），帮助开发者弄清出错的原因。例如，这里我使用 \texttt{assert} 语句人为制造一个异常，并打印出对应的回溯（参见 Item 81（"用 \texttt{assert} 验证内部假设，用 \texttt{raise} 报告未满足的期望"））：
+
+\begin{codebox}[python]
+def inner_func(message):
+    assert False, message
+def outer_func(message):
+    inner_func(message)
+outer_func("Oops!")
+>>>
+Traceback (most recent call last):
+  File "my_code.py", line 7, in <module>
+    outer_func("Oops!")
+    ~~~~~~~~~~^^^^^^^^^
+  File "my_code.py", line 5, in outer_func
+    inner_func(message)
+    ~~~~~~~~~~^^^^^^^^^
+  File "my_code.py", line 2, in inner_func
+    assert False, message
+           ^^^^^
+AssertionError: Oops!
+\end{codebox}
+
+这种默认的打印行为对于单线程代码是有帮助的，因为所有异常都发生在主线程中。但它不适用于正在并发处理大量请求的那些程序或服务器（参见 Item 71（"了解何时真正需要并发"））。如果你任由一个请求所产生的异常一路向上传播到入口点，整个程序就会崩溃，并导致所有其他请求也随之失败。
+
+处理这种问题的一种办法，是用一个兜底用的 \texttt{try} 语句把请求处理器的根逻辑包裹起来（参见 Item 85（"警惕捕获 Exception 类"）和 Item 86（"理解 Exception 与 BaseException 的区别"））。例如，这里我定义了一个假想的 \texttt{Request} 类和对应的处理函数。当遇到异常时，我可以把它打印到控制台日志中供开发者查看，然后向客户端返回一个错误码。这样就能确保所有其他的处理器继续运行，即便存在非法请求也不例外：
+
+\begin{codebox}[python]
+class Request:
+    def __init__(self, body):
+        self.body = body
+        self.response = None
+def do_work(data):
+    assert False, data
+    ...
+def handle(request):
+    try:
+        do_work(request.body)
+    except BaseException as e:
+        print(repr(e))
+        request.response = 400  # 请求错误
+request = Request("My message")
+handle(request)
+>>>
+AssertionError('My message')
+\end{codebox}
+
+这段代码的问题在于，异常值的字符串表示并不能提供足够的信息来调试问题。我无法像在 Python 解释器主线程中未处理的异常那样得到一份回溯。所幸，Python 可以用回溯（traceback）内置模块来填补这个缺口，它允许你在运行时从异常中提取回溯信息。这里我使用 traceback 内置模块中的 \texttt{print\_tb} 函数来打印调用栈：
+
+\begin{codebox}[python]
+import traceback
+def handle2(request):
+    try:
+        do_work(request.body)
+    except BaseException as e:
+        traceback.print_tb(e.__traceback__)  # 已修改
+        print(repr(e))
+        request.response = 400
+request = Request("My message 2")
+handle2(request)
+>>>
+  File "my_code.py", line 70, in handle2
+    do_work(request.body)
+    ~~~~~~~^^^^^^^^^^^^^^
+  File "my_code.py", line 42, in do_work
+    assert False, data
+           ^^^^^
+AssertionError('My message 2')
+\end{codebox}
+
+除了打印之外，你还可以按照自己喜欢的方式处理回溯的详细信息——包括文件名、行号、源代码行以及所在函数的名称（例如在 GUI 中展示）。这里我从回溯的每一帧中提取出函数名，并打印到控制台：
+
+\begin{codebox}[python]
+def handle3(request):
+    try:
+        do_work(request.body)
+    except BaseException as e:
+        stack = traceback.extract_tb(e.__traceback__)
+        for frame in stack:
+            print(frame.name)
+        print(repr(e))
+        request.response = 400
+request = Request("My message 3")
+handle3(request)
+>>>
+handle3
+do_work
+AssertionError('My message 3')
+\end{codebox}
+
+除了打印到控制台之外，我还可以用 traceback 模块来提供更高级的错误处理行为。例如，设想我想把遇到的异常记录到一个单独的文件中，每行编码为一个 JSON 负载（payload）。这里我用一个处理回溯帧的包装函数来实现：
+
+\begin{codebox}[python]
+import json
+def log_if_error(file_path, target, *args, **kwargs):
+    try:
+        target(*args, **kwargs)
+    except BaseException as e:
+        stack = traceback.extract_tb(e.__traceback__)
+        stack_without_wrapper = stack[1:]
+        trace_dict = dict(
+            stack=[ item.name
+for item in stack_without_wrapper],
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        json_data = json.dumps(trace_dict)
+        with open(file_path, "a") as f:
+            f.write(json_data)
+            f.write("\n")
+\end{codebox}
+
+用出错的 \texttt{do\_work} 函数调用这个包装函数，就能正确地把错误编码并写入磁盘：
+
+\begin{codebox}[python]
+log_if_error("my_log.jsonl", do_work, "First error")
+log_if_error("my_log.jsonl", do_work, "Second error")
+with open("my_log.jsonl") as f:
+    for line in f:
+        print(line, end="")
+>>>
+{"stack": ["do_work"], "error_type": "AssertionError",
+'"error_message": "First error"}
+{"stack": ["do_work"], "error_type": "AssertionError",
+'"error_message": "Second error"}
+\end{codebox}
+
+回溯（traceback）内置模块还包含许多其他函数，可以让你以几乎所需的各种方式轻松地格式化、打印和遍历异常的调用栈（stack trace）（参见 https://docs.python.org/3/library/traceback.html）。不过，某些边界情况仍然需要你自己处理（其中一个例子参见 Item 88（"考虑显式链接异常以澄清回溯"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 当未处理的异常一路向上传播到 Python 程序的入口点时，解释器会打印出一份格式工整的栈帧列表，指明导致错误的位置。
+\item 在高度并发的程序中，异常回溯往往不会被以同样的方式打印出来，使得错误更难理解和调试。
+\item 回溯（traceback）内置模块让你可以与异常中的栈帧进行交互，并以你认为合适的方式对其进行处理（即用于辅助调试）。
+\end{itemize}
+
+\section{Item 88: 考虑显式地链接异常以厘清回溯}
+
+Python 程序在代码遇到错误或某些情况时会抛出异常（exception）（参见 Item 32（「优先抛出异常而非返回 \texttt{None}」））。例如，这里我尝试访问字典（dictionary）中一个不存在的键，从而触发了一次异常的抛出：
+
+\begin{codebox}[python]
+my_dict = {}
+my_dict["does_not_exist"]
+>>>
+Traceback ...
+KeyError: 'does_not_exist'
+\end{codebox}
+
+我可以使用 \texttt{try} 语句来捕获并处理这个异常（参见 Item 80（「充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 语句块中的每一部分」））：
+
+\begin{codebox}[python]
+my_dict = {}
+try:
+    my_dict["does_not_exist"]
+except KeyError:
+    print("Could not find key!")
+>>>
+Could not find key!
+\end{codebox}
+
+如果我正在处理某个异常时又抛出了另一个异常，输出的样子会大不相同。例如，这里我在处理 \texttt{KeyError} 异常的同时，抛出了一个新定义的 \texttt{MissingError} 异常：
+
+\begin{codebox}[python]
+class MissingError(Exception):
+    ...
+try:
+    my_dict["does_not_exist"]    # Raises first exception
+except KeyError:
+    raise MissingError("Oops!")  # Raises second exception
+>>>
+Traceback ...
+KeyError: 'does_not_exist'
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+MissingError: Oops!
+\end{codebox}
+
+在 \texttt{except KeyError} 代码块中抛出的 \texttt{MissingError} 异常，是被向上传播给调用者的那个异常。不过你也可以看到，Python 打印的调用栈（stack trace）包含了导致最初问题的那个异常的信息：即 \texttt{my\_dict["does\_not\_exist"]} 表达式所抛出的 \texttt{KeyError}。之所以能拿到这些额外数据，是因为 Python 会自动把一个异常实例的 \texttt{\_\_context\_\_} 属性（attribute）赋给由外层 \texttt{except} 代码块所处理的那个异常实例。下面是和上面相同的代码，只不过现在我捕获了 \texttt{MissingError} 异常并打印它的 \texttt{\_\_context\_\_} 属性，以展示这些异常是如何被链接在一起的：
+
+\begin{codebox}[python]
+try:
+    try:
+        my_dict["does_not_exist"]
+    except KeyError:
+        raise MissingError("Oops!")
+except MissingError as e:
+    print("Second:", repr(e))
+    print("First: ", repr(e.__context__))
+>>>
+Second: MissingError('Oops!')
+First:  KeyError('does_not_exist')
+\end{codebox}
+
+在含有多层错误处理的复杂代码中，控制这些异常链、让错误信息更清晰会很有帮助。为此，Python 允许通过 \texttt{raise} 语句中的 \texttt{from} 子句来显式地链接异常。
+
+例如，假设我想定义一个辅助函数，实现与上面相同的字典查找行为：
+
+\begin{codebox}[python]
+def lookup(my_key):
+    try:
+        return my_dict[my_key]
+    except KeyError:
+        raise MissingError
+\end{codebox}
+
+当我查找一个存在的键时，可以毫无问题地取到对应的值：
+
+\begin{codebox}[python]
+my_dict["my key 1"] = 123
+print(lookup("my key 1"))
+>>>
+123
+\end{codebox}
+
+当给定的键缺失时，就会如预期那样抛出一个 \texttt{MissingError} 异常：
+
+\begin{codebox}[python]
+print(lookup("my key 2"))
+>>>
+Traceback ...
+KeyError: 'my key 2'
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+MissingError
+\end{codebox}
+
+现在假设我想增强 \texttt{lookup} 函数，使其能够在键缺失时联系一个远程数据库服务器，并填充 \texttt{my\_dict} 字典。下面我实现了这一行为，假定 \texttt{contact\_server} 会负责与数据库通信：
+
+\begin{codebox}[python]
+def contact_server(my_key):
+    print(f"Looking up {my_key!r} in server")
+    ...
+def lookup(my_key):
+    try:
+        return my_dict[my_key]
+    except KeyError:
+        result = contact_server(my_key)
+        my_dict[my_key] = result  # Fill the local cache
+        return result
+\end{codebox}
+
+反复调用这个函数，我可以看到服务器只在第一次调用时被联系——那时键还不在 \texttt{my\_dict} 缓存中。后续调用不再调用 \texttt{contact\_server}，而是直接返回 \texttt{my\_dict} 中已经存在的值：
+
+\begin{codebox}[python]
+print("Call 1")
+print("Result:", lookup("my key 2"))
+print("Call 2")
+print("Result:", lookup("my key 2"))
+>>>
+Call 1
+Looking up 'my key 2' in server
+Result: my value 2
+Call 2
+Result: my value 2
+\end{codebox}
+
+假设存在这样一种可能：数据库服务器并没有所请求的记录。在这种情况下，\texttt{contact\_server} 函数或许会抛出一种新型异常来表示这一状况：
+
+\begin{codebox}[python]
+class ServerMissingKeyError(Exception):
+    ...
+def contact_server(my_key):
+    print(f"Looking up {my_key!r} in server")
+    ...
+    raise ServerMissingKeyError
+    ...
+\end{codebox}
+
+现在，当我尝试查找一条缺失的记录时，看到的回溯（traceback）中既包含 \texttt{ServerMissingKeyError} 异常，也包含由于 \texttt{my\_dict} 缓存未命中而产生的原始 \texttt{KeyError}：
+
+\begin{codebox}[python]
+print(lookup("my key 3"))
+>>>
+Looking up 'my key 3' in server
+Traceback ...
+KeyError: 'my key 3'
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+ServerMissingKeyError
+\end{codebox}
+
+问题在于，\texttt{lookup} 函数不再像以前没有调用 \texttt{contact\_server} 时那样遵循相同的接口了。为了把异常的细节从调用者那里抽象出来，我希望缓存未命中时总是抛出一个 \texttt{MissingError}，而不是 \texttt{ServerMissingKeyError}——后者可能定义在我无法控制的另一个模块中（关于 API 中的异常类，参见 Item 121（「定义根异常（Root Exception）以隔离 API 调用者」））。
+
+为了解决这个问题，我可以把对 \texttt{contact\_server} 的调用再包进一个 \texttt{try} 语句，捕获 \texttt{ServerMissingKeyError} 异常，然后改而抛出一个 \texttt{MissingError}（使之符合我期望的 \texttt{lookup} API）：
+
+\begin{codebox}[python]
+def lookup(my_key):
+    try:
+        return my_dict[my_key]
+    except KeyError:
+        try:
+            result = contact_server(my_key)
+        except ServerMissingKeyError:
+            raise MissingError       # Convert the server error
+        else:
+            my_dict[my_key] = result  # Fill the local cache
+            return result
+\end{codebox}
+
+试试 \texttt{lookup} 的新实现，我可以确认向上传播给调用者的确实是 \texttt{MissingError} 异常：
+
+\begin{codebox}[python]
+print(lookup("my key 4"))
+>>>
+Looking up 'my key 4' in server
+Traceback ...
+KeyError: 'my key 4'
+The above exception was the direct cause of the following
+'exception:
+Traceback ...
+ServerMissingKeyError
+The above exception was the direct cause of the following
+'exception:
+Traceback ...
+MissingError
+\end{codebox}
+
+这条异常链显示了三种不同的错误，原因在于 \texttt{except} 子句在 \texttt{lookup} 函数中是怎样嵌套的。首先，抛出了 \texttt{KeyError} 异常。接着，在处理它的过程中，\texttt{contact\_server} 函数抛出了 \texttt{ServerMissingKeyError}，它通过 \texttt{\_\_context\_\_} 属性被隐式地从 \texttt{KeyError} 链接过来。随后 \texttt{ServerMissingKeyError} 被捕获，而 \texttt{MissingError} 被抛出，其 \texttt{\_\_context\_\_} 属性被隐式地赋给了当前正在处理的 \texttt{ServerMissingKeyError}。
+
+为这个 \texttt{MissingError} 打印出来的信息太多了——多到对于正在调试真实问题的程序员来说，反而可能让人困惑。减少输出的一种方法，是在 \texttt{raise} 语句中使用 \texttt{from} 子句来显式指明某个异常的来源。下面我让异常处理程序把 \texttt{MissingError} 从 \texttt{KeyError} 显式链接过来，从而隐藏 \texttt{ServerMissingKeyError} 这一源头错误：
+
+\begin{codebox}[python]
+def lookup_explicit(my_key):
+    try:
+        return my_dict[my_key]
+    except KeyError as e:              # Changed
+        try:
+            result = contact_server(my_key)
+        except ServerMissingKeyError:
+            raise MissingError from e  # Changed
+        else:
+            my_dict[my_key] = result
+            return result
+\end{codebox}
+
+再次调用这个函数，我可以确认 \texttt{ServerMissingKeyError} 异常不再被打印出来：
+
+\begin{codebox}[python]
+print(lookup_explicit("my key 5"))
+>>>
+Looking up 'my key 5' in server
+Traceback ...
+KeyError: 'my key 5'
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+MissingError
+\end{codebox}
+
+虽然在异常输出中看上去 \texttt{ServerMissingKeyError} 已经不再与 \texttt{MissingError} 异常相关联，但实际上它依然在那里，和之前一样被赋给了 \texttt{\_\_context\_\_} 属性。它之所以没有被打印，是因为在 \texttt{raise} 语句中使用 \texttt{from e} 子句，会把被抛出异常实例的 \texttt{\_\_cause\_\_} 属性设为 \texttt{KeyError}，并把 \texttt{\_\_suppress\_context\_\_} 属性设为 \texttt{True}。
+
+下面我展示这些属性的值，以厘清 Python 究竟用什么来控制未处理异常的打印：
+
+\begin{codebox}[python]
+try:
+    lookup_explicit("my key 6")
+except Exception as e:
+    print("Exception:", repr(e))
+    print("Context:  ", repr(e.__context__))
+    print("Cause:    ", repr(e.__cause__))
+    print("Suppress: ", repr(e.__suppress_context__))
+>>>
+Looking up 'my key 6' in server
+Exception: MissingError()
+Context:   ServerMissingKeyError()
+Cause:     KeyError('my key 6')
+Suppress:  True
+\end{codebox}
+
+这种会检查 \texttt{\_\_cause\_\_} 和 \texttt{\_\_suppress\_context\_\_} 的异常链遍历行为，仅存在于 Python 内置的异常打印器之中。如果你自己使用 \texttt{traceback} 模块来处理 \texttt{Exception} 的调用栈（参见 Item 87（「用 \texttt{traceback} 增强异常报告」）），或许会注意到那些被链接的异常数据似乎缺失了：
+
+\begin{codebox}[python]
+import traceback
+try:
+    lookup("my key 7")
+except Exception as e:
+    stack = traceback.extract_tb(e.__traceback__)
+    for frame in stack:
+        print(frame.line)
+>>>
+Looking up 'my key 7' in server
+lookup('my key 7')
+raise MissingError        # Convert the server error
+\end{codebox}
+
+为了提取出与 Python 为未处理异常所打印的相同的链接异常信息，你需要恰当地考虑每个异常的 \texttt{\_\_cause\_\_} 和 \texttt{\_\_context\_\_} 属性：
+
+\begin{codebox}[python]
+def get_cause(exc):
+    if exc.__cause__ is not None:
+        return exc.__cause__
+    elif not exc.__suppress_context__:
+        return exc.__context__
+    else:
+        return None
+\end{codebox}
+
+这个 \texttt{get\_cause} 函数可以在循环中调用，也可以递归调用，从而构建出完整的一串链接异常：
+
+\begin{codebox}[python]
+try:
+    lookup("my key 8")
+except Exception as e:
+    while e is not None:
+        stack = traceback.extract_tb(e.__traceback__)
+        for i, frame in enumerate(stack, 1):
+            print(i, frame.line)
+        e = get_cause(e)
+        if e:
+            print("Caused by")
+>>>
+Looking up 'my key 8' in server
+1 lookup('my key 8')
+2 raise MissingError        # Convert the server error
+Caused by
+1 result = contact_server(my_key)
+2 raise ServerMissingKeyError
+Caused by
+1 return my_dict[my_key]
+\end{codebox}
+
+另一种缩短 \texttt{MissingError} 异常链的办法是：抑制 \texttt{contact\_server} 中所抛出的 \texttt{ServerMissingKeyError} 的 \texttt{KeyError} 来源。下面我通过在对应的 \texttt{raise} 语句中使用 \texttt{from None} 子句来实现这一点：
+
+\begin{codebox}[python]
+def contact_server(key):
+    ...
+    raise ServerMissingKeyError from None  # Suppress
+    ...
+\end{codebox}
+
+再次调用 \texttt{lookup} 函数，我可以确认 \texttt{KeyError} 已经不再出现在 Python 默认异常处理输出的信息里了：
+
+\begin{codebox}[python]
+print(lookup("my key 9"))
+>>>
+Traceback ...
+ServerMissingKeyError
+The above exception was the direct cause of the following
+exception:
+Traceback ...
+MissingError
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 当异常从某个 \texttt{except} 子句内部被抛出时，该处理程序对应的原始异常将始终被保存到新抛出的异常实例的 \texttt{\_\_context\_\_} 属性中。
+\item \texttt{raise} 语句中的 \texttt{from} 子句，通过设定 \texttt{\_\_cause\_\_} 属性，让你能够显式地指明：某个先前抛出的异常正是新抛出异常的起因。
+\item 显式地将一个异常从另一个异常链接起来，会让 Python 只打印所指定的起因（或根本没有起因），而不再打印那个自动链接的异常。
+\end{itemize}
+
+\section{Item 89: 始终将资源传入生成器，并在外部由调用者负责清理}
+
+Python 提供了多种工具，例如异常处理程序（exception handler，参见 Item 80（"充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的各个代码块"））和 \texttt{with} 语句（参见 Item 82（"考虑使用 \texttt{contextlib} 和 \texttt{with} 语句实现可复用的 \texttt{try}/\texttt{finally} 行为"）），帮助我们确保文件、互斥锁（mutex）和套接字（socket）这类资源能够在正确的时机得到妥善清理。例如，在普通函数中，一个简单的 \texttt{finally} 子句会在返回值真正被调用者接收之前执行，这使它成为可靠关闭文件句柄（file handle）的理想位置：
+
+\begin{codebox}[python]
+def my_func():
+    try:
+        return 123
+    finally:
+        print("Finally my_func")
+print("Before")
+print(my_func())
+print("After")
+>>>
+Before
+Finally my_func
+123
+After
+\end{codebox}
+
+相反，当使用生成器函数（generator function，参见 Item 43（"考虑用生成器替代返回列表"））时，\texttt{finally} 子句要等到 \texttt{StopIteration} 异常被抛出、表明值序列已经耗尽时才会执行（参见 Item 21（"迭代参数时保持防御性"））。这意味着 \texttt{finally} 子句是在调用者接收到最后一个元素之后才执行的，与在普通函数中不同：
+
+\begin{codebox}[python]
+def my_generator():
+    try:
+        yield 10
+        yield 20
+        yield 30
+    finally:
+        print("Finally my_generator")
+print("Before")
+for i in my_generator():
+    print(i)
+print("After")
+>>>
+Before
+10
+20
+30
+Finally my_generator
+After
+\end{codebox}
+
+然而，Python 的生成器也有可能没有被完整迭代。从理论上讲，这会阻止 \texttt{StopIteration} 异常被抛出，进而阻止 \texttt{finally} 子句的执行。这里我通过手动推进生成器函数的迭代器来模拟这种行为；注意 \texttt{"Finally my\_generator"} 并没有被打印出来：
+
+\begin{codebox}[python]
+it = my_generator()
+print("Before")
+print(next(it))
+print(next(it))
+print("After")
+>>>
+Before
+10
+20
+After
+\end{codebox}
+
+\texttt{finally} 子句还没有执行。它什么时候会执行呢？答案是视情况而定：它可能永远都不会运行。如果对该迭代器（iterator）的最后一次引用被丢弃、垃圾回收（garbage collection，GC）处于启用状态，并且一次回收周期（collection cycle）得以运行，那么生成器的 \texttt{finally} 子句应当会被执行：
+
+\begin{codebox}[python]
+import gc
+del it
+gc.collect()
+>>>
+Finally my_generator
+\end{codebox}
+
+支撑这一机制的是 \texttt{GeneratorExit} 异常，它继承自 \texttt{BaseException}（参见 Item 86（"理解 \texttt{Exception} 与 \texttt{BaseException} 的区别"））。在垃圾回收时，如果生成器尚未耗尽，Python 会将这种特殊类型的异常注入生成器（背景知识参见 Item 46（"将迭代器作为参数传入生成器，而非调用 \texttt{send} 方法"））。通常这会让生成器返回并清空其栈，但在技术层面上，你可以捕获这种异常并对其进行处理：
+
+\begin{codebox}[python]
+def catching_generator():
+    try:
+        yield 40
+        yield 50
+        yield 60
+    except BaseException as e:  # 捕获 GeneratorExit
+        print("Catching handler", type(e), e)
+        raise
+\end{codebox}
+
+在异常处理程序的末尾，我使用了不带任何参数的裸 \texttt{raise} 关键字，以确保 \texttt{GeneratorExit} 异常能够继续向上传播，且 Python 运行时的机制不会被破坏。这里我推进这个新的生成器，然后触发另一次垃圾回收周期：
+
+\begin{codebox}[python]
+it = catching_generator()
+print("Before")
+print(next(it))
+print(next(it))
+print("After")
+del it
+gc.collect()
+>>>
+Before
+40
+50
+After
+Catching handler <class 'GeneratorExit'>
+\end{codebox}
+
+这个异常处理程序是由 \texttt{gc} 模块单独运行的，并不在创建该生成器并推进它的原始调用栈（call stack）中。
+
+如果在处理 \texttt{GeneratorExit} 异常的过程中又抛出了另一个异常，会发生什么？这里我定义了另一个生成器来演示这种可能性：
+
+\begin{codebox}[python]
+def broken_generator():
+    try:
+        yield 70
+        yield 80
+    except BaseException as e:
+        print("Broken handler", type(e), e)
+        raise RuntimeError("Broken")
+it = broken_generator()
+print("Before")
+print(next(it))
+print("After")
+del it
+gc.collect()
+print("Still going")
+>>>
+Before
+70
+After
+Exception ignored in: <generator object broken_generator at
+' 0x10099b2e0>
+Traceback ...
+RuntimeError: Broken
+Broken handler <class 'GeneratorExit'>
+Still going
+\end{codebox}
+
+这个结果令人意外：\texttt{gc} 模块捕获了 \texttt{broken\_generator} 抛出的 \texttt{RuntimeError}，并将其打印到 \texttt{sys.stderr}。该异常并没有被回抛到调用 \texttt{gc.collect} 的主线程（main thread）中。相反，它被完全吞没，对程序的其余部分隐藏了起来，而程序继续运行。这意味着你无法依赖生成器中的异常处理程序或 \texttt{finally} 子句来始终执行并向调用者报告错误。
+
+为了规避这种潜在风险，你可以把需要清理的资源在生成器外部进行分配，再将其作为参数传入。例如，假设我想构建一个简单的工具，用于找出一个文件前五行的最大长度。这里我定义一个简单的生成器，它根据文件路径产出各行长度：
+
+\begin{codebox}[python]
+def lengths_path(path):
+    try:
+        with open(path) as handle:
+            for i, line in enumerate(handle):
+                print(f"Line {i}")
+                yield len(line.strip())
+    finally:
+        print("Finally lengths_path")
+\end{codebox}
+
+我可以在一个循环中调用这个生成器来计算最大值，然后提前终止循环，使 \texttt{lengths\_path} 生成器停留在部分执行的状态：
+
+\begin{codebox}[python]
+max_head = 0
+it = lengths_path("my_file.txt")
+for i, length in enumerate(it):
+    if i == 5:
+        break
+    else:
+        max_head = max(max_head, length)
+print(max_head)
+>>>
+Line 0
+Line 1
+Line 2
+Line 3
+Line 4
+Line 5
+99
+\end{codebox}
+
+当生成器迭代器在之后的某个时刻超出作用域（scope）后，它会被垃圾回收，\texttt{finally} 子句也会如预期那样运行：
+
+\begin{codebox}[python]
+del it
+gc.collect()
+>>>
+Finally lengths_path
+\end{codebox}
+
+这种延迟行为正是我想要避免的。我需要 \texttt{finally} 在原始循环的调用栈内运行，这样一旦遇到任何错误，它们就能被正确回抛给调用者。这对于互斥锁这类必须避免死锁（deadlock）的资源尤为重要。为了实现正确的行为，我可以把一个已打开的文件句柄传入生成器函数：
+
+\begin{codebox}[python]
+def lengths_handle(handle):
+    try:
+        for i, line in enumerate(handle):
+            print(f"Line {i}")
+            yield len(line.strip())
+    finally:
+        print("Finally lengths_handle")
+\end{codebox}
+
+我可以在循环外层使用 \texttt{with} 语句，确保文件被可靠且立即地打开和关闭，这样生成器就无需自行管理文件句柄：
+
+\begin{codebox}[python]
+max_head = 0
+with open("my_file.txt") as handle:
+    it = lengths_handle(handle)
+    for i, length in enumerate(it):
+        if i == 5:
+            break
+        else:
+            max_head = max(max_head, length)
+print(max_head)
+print("Handle closed:", handle.closed)
+>>>
+Line 0
+Line 1
+Line 2
+Line 3
+Line 4
+Line 5
+99
+Handle closed: True
+\end{codebox}
+
+同样地，由于循环在耗尽之前就结束了，生成器函数尚未退出，\texttt{finally} 子句也还没有执行。但采用这种不同做法并无问题，因为我并没有依赖生成器去完成任何重要的清理工作。
+
+\texttt{GeneratorExit} 异常体现了正确性与系统健康之间的一场折中。如果生成器不被强制最终退出，所有被提前停止的生成器都会泄漏内存（memory leak），并可能导致程序崩溃（crash）。吞没错误是 Python 做出的权衡取舍，因为在大多数情况下这样做是合理的。但你需要确保自己的生成器预期到这种行为，并据此做好规划。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在普通函数中，\texttt{finally} 子句会在返回值之前执行；但在生成器函数中，\texttt{finally} 子句只有在耗尽、即 \texttt{StopIteration} 异常被抛出之后才会运行。
+\item 为了防止内存泄漏（memory leak），垃圾回收器会向那些不再被引用、且只被部分迭代的生成器注入 \texttt{GeneratorExit} 异常，迫使它们退出并释放资源。
+\item 由于这种行为，通常更好的做法是把资源（例如文件和互斥锁）传入生成器函数，而不是依赖生成器自身正确地分配和清理这些资源。
+\end{itemize}
+
+\section{Item 90: 永远不要把 \texttt{\_\_debug\_\_} 设为 \texttt{False}}
+
+当你在 Python 程序中像这样加入一条 \texttt{assert} 语句时：
+
+\begin{codebox}[python]
+n = 3
+assert n % 2 == 0, f"{n=} not even"
+\end{codebox}
+
+它本质上等价于下面这段代码：
+
+\begin{codebox}[python]
+if __debug__:
+    if not (n % 2 == 0):
+        raise AssertionError(f"{n=} not even")
+>>>
+Traceback ...
+AssertionError: n=3 not even
+\end{codebox}
+
+你也可以直接在代码中用 \texttt{\_\_debug\_\_} 这个内置全局变量，来把更复杂的校验代码「门控」起来再执行：
+
+\begin{codebox}[python]
+def expensive_check(x):
+    ...
+items = [1, 2, 3]
+if __debug__:
+    for i in items:
+        assert expensive_check(i), f"Failed {i=}"
+>>>
+Traceback ...
+AssertionError: Failed i=2
+\end{codebox}
+
+把 \texttt{\_\_debug\_\_} 这个内置全局变量设为 \texttt{False} 的唯一方法，是在 Python 启动时通过 \texttt{-O} 命令行参数来指定。例如，下面这行 Python 调用会以 \texttt{\_\_debug\_\_} 等于 \texttt{True}（默认值）启动：
+
+\begin{codebox}[python]
+$ python3 -c 'assert False, "FAIL"; print("OK")'
+Traceback ...
+AssertionError: FAIL
+\end{codebox}
+
+加上 \texttt{-O} 命令行选项会让 \texttt{assert} 语句被完全跳过，从而得到不同的输出：
+
+\begin{codebox}[python]
+$ python3 -O -c 'assert False, "FAIL"; print("OK")'
+OK
+\end{codebox}
+
+尽管 Python 是一门极其动态的语言（参见 Item 3（「绝不要指望 Python 在编译期就发现错误」）），但它不允许你在运行时修改 \texttt{\_\_debug\_\_} 的值：
+
+\begin{codebox}[python]
+__debug__ = False
+>>>
+Traceback ...
+SyntaxError: cannot assign to __debug__
+\end{codebox}
+
+如果 \texttt{\_\_debug\_\_} 这个常量是 \texttt{True}，那么在程序的生命周期内它将始终保持如此。
+
+\texttt{\_\_debug\_\_} 这个标志最初的目的是让用户通过在运行时跳过那些看似不必要的断言来优化代码性能。然而随着时间的推移，越来越多的代码——尤其是常见的框架和库——已经依赖断言处于激活状态，以便在程序启动和运行时验证假设。通过禁用 \texttt{assert} 语句和其他调试代码，你正在以极少的实际收益损害程序的正确性。
+
+如果你追求的是性能，那么有远比这更好的办法让程序更快（参见 Item 92（「在优化之前先做性能分析」）以及 Item 94（「清楚何时以及如何用另一种编程语言替换 Python」））。如果你有非常昂贵的校验代码需要在运行时禁用，那么请自己创建 \texttt{enable\_debug} 辅助函数以及相关的全局变量，在你自己的代码里控制这些调试操作，而不是依赖 \texttt{\_\_debug\_\_}。
+
+始终让断言保持激活状态仍然有其价值，尤其是在底层代码中，即便你需要从代码里榨出每一分性能也是如此，比如用 MicroPython 在微控制器上运行时（https://micropython.org）。有点反直觉的是，即便断言本身没有失败，\texttt{assert} 语句的存在也能帮你调试。当你收到一份缺陷报告时，你可以利用那些成功通过的断言来排除可能性，缩小出错的范围。
+
+归根结底，断言是确保正确性的有力工具，应当在整个代码库中广泛使用，以便让假设变得显式可见。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 默认情况下，\texttt{\_\_debug\_\_} 这个内置全局变量是 \texttt{True}，Python 程序会执行所有的 \texttt{assert} 语句。
+\item 可以使用 \texttt{-O} 命令行标志把 \texttt{\_\_debug\_\_} 设为 \texttt{False}，这会导致 \texttt{assert} 语句被忽略。
+\item 即便断言本身并未失败，断言的存在也能帮助缩小缺陷的成因范围。
+\end{itemize}
+
+\section{Item 91: 除非你在编写开发者工具，否则避免使用 exec 和 eval}
+
+Python 是一门动态语言，允许你在运行时近乎为所欲为（这可能带来问题；参见 Item 3（「绝不要指望 Python 在编译期就发现错误」））。它的许多特性都提供了这种极其灵活的能力，例如 \texttt{setattr}/\texttt{getattr}/\texttt{hasattr}（参见 Item 61（「用 \texttt{\_\_getattr\_\_}、\texttt{\_\_getattribute\_\_} 和 \texttt{\_\_setattr\_\_} 实现惰性属性」））、元类（metaclass，参见 Item 64（「用 \texttt{\_\_set\_name\_\_} 标注类属性」））以及描述符（descriptor，参见 Item 60（「用描述符实现可复用的 \texttt{@property} 方法」））。
+
+然而，最动态的能力莫过于在运行时从字符串中执行任意代码。在 Python 中，这可以通过 \texttt{eval} 和 \texttt{exec} 这两个内置函数实现。
+
+\texttt{eval} 接受一个表达式字符串，并将其求值结果作为普通的 Python 对象返回：
+
+\begin{codebox}[python]
+x = eval("1 + 2")
+print(x)
+>>>
+3
+\end{codebox}
+
+把一条语句传给 \texttt{eval} 会导致错误：
+
+\begin{codebox}[python]
+eval(
+    """
+if True:
+    print('okay')
+else:
+    print('no')
+"""
+)
+>>>
+Traceback ...
+SyntaxError: invalid syntax (<string>, line 2)
+\end{codebox}
+
+相反，你可以用 \texttt{exec} 来动态求值更大块的 Python 代码。\texttt{exec} 总是返回 \texttt{None}，要想从中取回数据，你需要用到全局作用域和局部作用域字典这两个参数。在这里，当我访问 \texttt{my\_condition} 变量时，它会向上冒泡到全局作用域去解析，而我对 \texttt{x} 变量的赋值则发生在局部作用域（背景知识参见 Item 33（「了解闭包如何与变量作用域及 \texttt{nonlocal} 交互」））：
+
+\begin{codebox}[python]
+global_scope = {"my_condition": False}
+local_scope = {}
+exec(
+    """
+if my_condition:
+    x = 'yes'
+else:
+    x = 'no'
+""",
+    global_scope,
+    local_scope,
+)
+print(local_scope)
+>>>
+{'x': 'no'}
+\end{codebox}
+
+如果你在一个原本正常的应用代码库中发现了 \texttt{eval} 或 \texttt{exec}，这往往是一个危险信号，表明某处出了严重问题。如果这些特性被无意间连接到一个能被攻击者利用的输入通道，就会引发严重的安全问题。即便是在插件架构中——这些特性看起来似乎很自然——Python 也有更好的办法达到类似的效果（参见 Item 98（「用动态导入惰性加载模块以减少启动时间」））。
+
+真正适合使用 \texttt{eval} 和 \texttt{exec} 的场合，只有那些用来改善开发体验、支撑你的应用的代码，例如调试器、笔记本系统、运行-求值-打印循环（REPL）、性能基准测试工具、代码生成工具等等。除此之外的一切目的，都应当避开这些不安全的函数，转而使用 Python 其他的动态与元编程特性。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{eval} 允许你执行一个包含 Python 表达式的字符串，并捕获其返回值。
+\item \texttt{exec} 允许你执行一段 Python 代码块，并影响变量作用域（variable scope）及周围环境。
+\item 由于存在潜在的安全风险，这些特性应当极少使用甚至完全不用，且只能局限于改善开发体验。
+\end{itemize}

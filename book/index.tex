@@ -1,0 +1,36 @@
+% book/index.tex —— 封面、目录与全书章节索引（Effective Python, 3e 中文版）
+
+% 原书封面（取自原版 PDF 第 1 页，满版出血，单独用原书封面尺寸 504×657.36bp）
+\myFrontNoToc{content/front/00-cover}
+
+% 中文版封面（仿原书配色重画；不需要可把下面这行注释掉）
+% \myFrontNoToc{content/front/00-cover-cn}
+
+% 中文内封（仿原书配色重画的标题页）
+\myFrontNoToc{content/front/00-title}
+
+\newpage
+\thispagestyle{empty}
+\tableofcontents
+\newpage
+
+\myFront{前言}{content/front/01-preface}
+\myFront{致谢}{content/front/02-acknowledgments}
+\myFront{关于作者}{content/front/03-author}
+
+\myChapter{1}{Pythonic 思维}{content/main/01}
+\myChapter{2}{字符串与切片}{content/main/02}
+\myChapter{3}{循环与迭代器}{content/main/03}
+\myChapter{4}{字典}{content/main/04}
+\myChapter{5}{函数}{content/main/05}
+\myChapter{6}{推导式与生成器}{content/main/06}
+\myChapter{7}{类与接口}{content/main/07}
+\myChapter{8}{元类与属性}{content/main/08}
+\myChapter{9}{并发与并行}{content/main/09}
+\myChapter{10}{健壮性}{content/main/10}
+\myChapter{11}{性能}{content/main/11}
+\myChapter{12}{数据结构与算法}{content/main/12}
+\myChapter{13}{测试与调试}{content/main/13}
+\myChapter{14}{协作}{content/main/14}
+
+\myFront{索引}{content/back/00-index}

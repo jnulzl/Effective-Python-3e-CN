@@ -1,0 +1,1348 @@
+用于评判程序执行质量的指标（metric）五花八门，包括 CPU 利用率、吞吐量（throughput）、延迟（latency）、响应时间、内存占用与缓存命中率。这些指标还可以根据其统计分布以不同方式评估。例如，就延迟而言，取决于你的目标，你可能要考虑平均延迟、中位延迟、第 99 百分位延迟或最坏情况延迟。还有一些建立在底层指标之上的、特定于应用的指标，例如每秒事务数、首次绘制时间（time to first paint）、最大帧率与有效吞吐（goodput）。
+
+达成良好的性能，意味着你编写的代码满足了你最关心的某项或多项量化测量的预期。哪些指标重要，取决于问题领域、生产环境与用户画像；并没有放之四海而皆准的目标。性能工程（performance engineering）是一门分析程序执行行为、找出可改进之处，并实施或大或小的改动以最大化或最小化最关键指标的学科。
+
+Python 并不被视为一门高性能语言，尤其是与为此任务而构建的更低层级的语言相比。考虑到 Python 运行时（runtime）的开销与限制，这一名声可以理解，特别是在并行方面（相关背景见 Item 68「用线程处理阻塞式 I/O；避免用于并行（Use Threads for Blocking I/O; Avoid for Parallelism）」）。话虽如此，Python 包含多种多样的能力，只需相对较少的投入，就能让程序取得令人惊讶的出色性能。借助这些特性，在保留 Python 高级特性带来的生产率优势的同时，从宿主系统榨取最大性能也是可能的。
+
+\section{Item 92: 在优化前先做性能剖析}
+
+Python 的动态特性会导致其运行时性能出现令人意外的行为。你可能以为会很慢的操作，实际上非常快（例如字符串处理、使用生成器（generator））。你可能以为会很快的语言特性，实际上非常慢（例如属性访问、函数调用）。Python 程序中导致变慢的真正根源可能难以捉摸。
+
+最佳做法是忽略直觉，在尝试优化之前直接测量程序的性能。Python 提供了内置的剖析器（profiler），用于确定程序中哪些部分占用了执行时间。剖析能让你把优化工作集中在最大的问题源头上，而忽略那些不影响速度的程序部分（即遵循学术文献中的阿姆达尔定律（Amdahl's law））。
+
+例如，假设我想弄明白一个程序中的某个算法为什么很慢。这里我定义一个函数，用插入排序（insertion sort）对一组数据进行排序：
+
+\begin{codebox}[python]
+def insertion_sort(data):
+    result = []
+    for value in data:
+        insert_value(result, value)
+    return result
+\end{codebox}
+
+插入排序的核心机制是那个为每一条数据查找插入位置的函数。这里我定义一个极为低效的 \texttt{insert\_value} 函数版本，它对输入数组做线性扫描：
+
+\begin{codebox}[python]
+def insert_value(array, value):
+    for i, existing in enumerate(array):
+        if existing > value:
+            array.insert(i, value)
+            return
+    array.append(value)
+\end{codebox}
+
+为了剖析 \texttt{insertion\_sort} 和 \texttt{insert\_value}，我创建了一组随机数数据集，并定义一个 \texttt{test} 函数传给剖析器（关于 \texttt{lambda} 的背景，参见 Item 39「优先使用 \texttt{functools.partial} 而非 \texttt{lambda} 表达式作为粘合函数」）：
+
+\begin{codebox}[python]
+from random import randint
+max_size = 12**4
+data = [randint(0, max_size) for _ in range(max_size)]
+test = lambda: insertion_sort(data)
+\end{codebox}
+
+Python 提供了两个内置剖析器：一个是纯 Python 实现（\texttt{profile}），另一个是 C 扩展模块（\texttt{cProfile}）。\texttt{cProfile} 这个内置模块更好，因为它在剖析程序时对程序性能的影响微乎其微。纯 Python 的替代品会带来很高的开销，从而扭曲结果。
+
+注意：在剖析一个 Python 程序时，要确保你测量的就是代码本身，而不是任何外部系统。要当心那些访问网络或磁盘上资源的函数。由于底层系统很慢，这些函数可能看起来对你的程序执行时间有巨大影响。如果你的程序使用了缓存（cache）来掩盖这类慢速资源的延迟，你还应当在开始剖析之前确保缓存已经充分预热（warmed up）。
+
+这里我从 \texttt{cProfile} 模块实例化一个 \texttt{Profile} 对象，并用它的 \texttt{runcall} 方法把测试函数交给它运行：
+
+\begin{codebox}[python]
+from cProfile import Profile
+profiler = Profile()
+profiler.runcall(test)
+\end{codebox}
+
+测试函数运行完毕后，我可以使用内置模块 \texttt{pstats} 及其 \texttt{Stats} 类来提取关于其性能的统计信息。\texttt{Stats} 对象上的各种方法可以调整如何筛选和排序剖析信息，从而只显示我关心的内容：
+
+\begin{codebox}[python]
+from pstats import Stats
+stats = Stats(profiler)
+stats.strip_dirs()
+stats.sort_stats("cumulative")
+stats.print_stats()
+\end{codebox}
+
+输出是一张按函数组织的信息表。数据样本仅取自剖析器处于活动状态的时段，也就是上面 \texttt{runcall} 方法调用期间：
+
+\begin{codebox}[python]
+>>>
+        41475 function calls in 2.198 seconds
+  Ordered by: cumulative time
+  ncalls tottime percall cumtime percall filename:lineno(function)
+        1   0.000   0.000   2.198   2.198 main.py:35(<lambda>)
+        1   0.003   0.003   2.198   2.198 main.py:10(insertion_sort)
+    20736   2.137   0.000   2.195   0.000 main.py:20(insert_value)
+    20729   0.058   0.000   0.058   0.000 {method 'insert' of 'list' objects}
+        7   0.000   0.000   0.000   0.000 {method 'append' of 'list' objects}
+\end{codebox}
+
+下面快速说明一下剖析器统计表中各列的含义：
+
+\begin{itemize}
+\item \texttt{ncalls}：剖析期间对该函数的调用次数。
+\item \texttt{tottime}：执行该函数所花费的秒数，不包括执行它所调用的其他函数所花费的时间。
+\item \texttt{tottime percall}：每次调用该函数时在其内部花费的平均秒数，不包括执行它所调用的其他函数所花费的时间。即 \texttt{tottime} 除以 \texttt{ncalls}。
+\item \texttt{cumtime}：执行该函数累计花费的秒数，包括它调用的所有其他函数所花费的时间。
+\item \texttt{cumtime percall}：每次调用该函数时累计花费的平均秒数，包括它调用的所有其他函数所花费的时间。即 \texttt{cumtime} 除以 \texttt{ncalls}。
+\end{itemize}
+
+查看上面这张剖析器统计表，我可以看出测试中 CPU 占用最多的是在 \texttt{insert\_value} 函数上累计耗费的时间。这里我重新定义该函数，改用更高效的 \texttt{bisect} 内置模块（参见 Item 102「考虑用 \texttt{bisect} 搜索已排序序列」）：
+
+\begin{codebox}[python]
+from bisect import bisect_left
+def insert_value(array, value):
+    i = bisect_left(array, value)
+    array.insert(i, value)
+\end{codebox}
+
+我可以再次运行剖析器，生成一张新的剖析统计表。新函数快得多，其累计耗费时间几乎只有之前 \texttt{insert\_value} 函数的 1/40：
+
+\begin{codebox}[python]
+>>>
+        62211 function calls in 0.067 seconds
+  Ordered by: cumulative time
+  ncalls tottime percall cumtime percall filename:lineno(function)
+        1   0.000   0.000   0.067   0.067 main.py:35(<lambda>)
+        1   0.002   0.002   0.067   0.067 main.py:10(insertion_sort)
+    20736   0.004   0.000   0.064   0.000 main.py:109(insert_value)
+    20736   0.056   0.000   0.056   0.000 {method 'insert' of 'list' objects}
+    20736   0.004   0.000   0.004   0.000 {built-in method _bisect.bisect_left}
+\end{codebox}
+
+有时在你剖析整个程序时，可能会发现某个通用的工具函数占用了绝大部分执行时间。剖析器默认输出让这种情形难以理解，因为它没有显示该工具函数被程序的许多不同部分所调用。
+
+例如，这里 \texttt{my\_utility} 函数被程序中的两个不同的函数反复调用：
+
+\begin{codebox}[python]
+def my_utility(a, b):
+    c = 1
+    for i in range(100):
+        c += a * b
+def first_func():
+    for _ in range(1000):
+        my_utility(4, 5)
+def second_func():
+    for _ in range(10):
+        my_utility(1, 3)
+def my_program():
+    for _ in range(20):
+        first_func()
+        second_func()
+\end{codebox}
+
+对这段代码做剖析并使用默认的 \texttt{print\_stats} 输出，得到的统计信息令人困惑：
+
+\begin{codebox}[python]
+>>>
+          20242 function calls in 0.040 seconds
+   Ordered by: cumulative time
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+         1    0.000    0.000    0.040    0.040 main.py:172(my_program)
+        20    0.002    0.000    0.040    0.002 main.py:164(first_func)
+     20200    0.038    0.000    0.038    0.000 main.py:159(my_utility)
+        20    0.000    0.000    0.000    0.000 main.py:168(second_func)
+\end{codebox}
+
+\texttt{my\_utility} 函数显然是大部分执行时间的来源，但为什么这个函数会被调用这么多次却并不一目了然。如果你翻查程序的代码，会发现 \texttt{my\_utility} 有多个调用点，却依然会感到困惑。
+
+为了解决这个问题，Python 剖析器提供了 \texttt{print\_callers} 方法，用于显示哪些调用者对各函数的剖析信息有贡献：
+
+\begin{codebox}[python]
+stats.print_callers()
+\end{codebox}
+
+这张剖析器统计表在左侧显示被调用的函数，在右侧显示负责发起调用的函数。从这里可以清楚地看到，\texttt{my\_utility} 主要被 \texttt{first\_func} 调用：
+
+\begin{codebox}[python]
+>>>
+   Ordered by: cumulative time
+Function                      was called by...
+                                   ncalls  tottime  cumtime
+main.py:172(my_program)       <-
+main.py:164(first_func)       <-      20    0.002  0.040  main.py:172(my_program)
+main.py:159(my_utility)       <-   20000    0.038  0.038  main.py:164(first_func)
+                                      200    0.000  0.000  main.py:168(second_func)
+main.py:168(second_func)      <-      20    0.000  0.000
+\end{codebox}
+
+或者，你也可以调用 \texttt{print\_callees} 方法，它会自顶向下地划分每个函数（左侧）消耗时间执行其他依赖函数（右侧）的情况，这些依赖函数在调用栈（call stack）的更深处：
+
+\begin{codebox}[python]
+stats.print_callees()
+>>>
+callees
+   Ordered by: cumulative time
+Function                      called...
+                                   ncalls  tottime  cumtime
+main.py:172(my_program)       ->      20    0.002    0.041  Profiling.md:164(first_func)
+                                       20    0.000    0.000  Profiling.md:168(second_func)
+main.py:164(first_func)       ->   20000    0.038    0.038  Profiling.md:159(my_utility)
+main.py:159(my_utility)       ->
+main.py:168(second_func)      ->     200    0.000    0.000  Profiling.md:159(my_utility)
+\end{codebox}
+
+如果你用 \texttt{cProfile} 还弄不明白程序为什么慢，也别担心。Python 还包含其他用于评估性能的工具（参见 Item 93「用 \texttt{timeit} 微基准测试优化性能关键代码」、Item 98「用动态导入惰性加载（lazy-load）模块以减少启动时间」以及 Item 115「使用 \texttt{tracemalloc} 了解内存使用与泄漏」）。此外还有一些社区构建的工具（参见 Item 116「知道去哪里寻找社区构建的模块」），它们具备额外的性能评估能力，例如逐行剖析器（line profiler）、采样剖析器（sampling profiler）、与 Linux 的 \texttt{perf} 工具集成、内存使用剖析器等。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在优化之前对 Python 程序进行剖析很重要，因为导致变慢的根源往往很隐蔽。
+\item 使用 \texttt{cProfile} 模块而非 \texttt{profile} 模块，因为它能提供更准确的剖析信息。
+\item \texttt{Profile} 对象的 \texttt{runcall} 方法提供了在隔离环境中剖析一整棵函数调用树所需的全部功能。
+\item \texttt{Stats} 对象让你能够筛选并打印出理解程序性能所需的那部分剖析信息。
+\end{itemize}
+
+\section{Item 93: 使用 timeit 微基准测试优化性能关键代码}
+
+在试图最大化 Python 程序性能时，使用性能剖析器（profiler）极为重要，因为缓慢的根源可能并不明显（参见 Item 92（「优化前先做性能剖析」））。一旦确定了真正的问题区域，重构为更好的架构或使用更合适的数据结构，往往能带来显著的效果（参见 Item 104（「了解如何使用 heapq 实现优先队列」））。然而，代码中的某些热点即使经过多轮剖析与优化，似乎仍难以消除。在尝试更复杂的解决方案之前（参见 Item 94（「了解何时以及如何用其他编程语言替代 Python」）），不妨考虑使用内置的 \texttt{timeit} 模块来运行微基准测试。
+
+\texttt{timeit} 的目的是精确测量小段代码的性能。它能让你对同一明确问题的多种解决方案进行量化和比较。虽然性能剖析和整程序基准测试确实有助于发现较大组件中可优化的空间，但在如此宽泛的范围内，潜在的改进点可能无穷无尽，且探索成本高昂。相比之下，微基准测试可用于测量同一狭窄定义行为的多种实现，使你能够采用科学的方法来寻找性能最佳的解。
+
+使用 \texttt{timeit} 模块很简单。下面我来测量将两个整数相加需要多长时间：
+
+\begin{codebox}[python]
+import timeit
+delay = timeit.timeit(stmt="1+2")
+print(delay)
+>>>
+0.003767708025407046
+\end{codebox}
+
+返回值的单位是秒，表示执行 \texttt{stmt} 参数所提供代码片段 100 万次迭代所需的时长。对于较慢的微基准测试，这一默认的重复次数可能过多，因此 \texttt{timeit} 允许你通过 \texttt{number} 参数指定一个更合适的次数：
+
+\begin{codebox}[python]
+delay = timeit.timeit(stmt="1+2", number=100)
+print(delay)
+>>>
+7.500057108700275e-07
+\end{codebox}
+
+然而，上面指定的 100 次迭代太少，以至于测得的微基准时间可能开始淹没在计算机的噪声之中。由于其他进程干扰内存与缓存状态、操作系统运行周期性后台任务、接收到硬件中断等原因，性能总会有某些自然波动。为了让微基准测试准确，它需要使用大量迭代次数来抵消这类噪声。\texttt{timeit} 模块在执行代码片段时还会禁用垃圾回收（GC），以尽量减小方差。
+
+我建议显式地提供迭代次数参数。我通常会把它赋给一个变量，稍后再用它来计算每次迭代的平均时间。这个归一化后的值便可作为一个稳健的指标，在需要时与其他实现进行比较，或随时间跟踪观测（例如，用于检测性能回退）：
+
+\begin{codebox}[python]
+count = 1_000_000
+delay = timeit.timeit(stmt="1+2", number=count)
+print(f"{delay/count*1e9:.2f} nanoseconds")
+>>>
+4.36 nanoseconds
+\end{codebox}
+
+反复运行单段代码并不总是足以产生有用的微基准测试。你常常需要创建某种支撑代码、测试夹具或可在迭代中使用的数据结构。\texttt{timeit} 的 \texttt{setup} 参数满足了这一需求：它接受一个代码片段，该片段在所有迭代之前只运行一次，且不计入时间测量。
+
+例如，假设我想确定一个数字是否存在于一个大型随机化数值列表中。我不希望这个微基准测试包含创建大型列表并打乱它所花的时间。下面我把这些前置任务放进 \texttt{setup} 片段；同时提供 \texttt{globals} 参数，使 \texttt{stmt} 和 \texttt{setup} 能够引用代码中其他地方定义的名称，例如已导入的 \texttt{random} 模块（相关背景见 Item 91（「除非在构建开发工具，否则避免使用 exec 和 eval」））：
+
+\begin{codebox}[python]
+import random
+count = 100_000
+delay = timeit.timeit(
+    setup="""
+numbers = list(range(10_000))
+random.shuffle(numbers)
+probe = 7_777
+""",
+    stmt="""
+probe in numbers
+""",
+    globals=globals(),
+    number=count,
+)
+print(f"{delay/count*1e9:.2f} nanoseconds")
+>>>
+13078.05 nanoseconds
+\end{codebox}
+
+建立了这一基线（13 毫秒）之后，我可以尝试用不同的方法产生相同的行为，看看它对微基准测试有何影响。下面我把 \texttt{setup} 代码片段中创建的列表换成一个集合（set）数据结构：
+
+\begin{codebox}[python]
+delay = timeit.timeit(
+    setup="""
+numbers = set(range(10_000))
+probe = 7_777
+""",
+    stmt="""
+probe in numbers
+""",
+    globals=globals(),
+    number=count,
+)
+print(f"{delay/count*1e9:.2f} nanoseconds")
+>>>
+14.87 nanoseconds
+\end{codebox}
+
+这表明检查元素是否在集合中的速度大约是检查列表的 1000 倍。原因在于，集合数据结构对其元素的访问是常量时间，与字典（dict）类似，而列表所需的访问时间与它所包含的元素数量成正比。像这样使用 \texttt{timeit} 是找到满足需求的理想数据结构或算法的绝佳方式。
+
+在这种微基准测试中可能出现的一个问题是，需要测量紧凑循环（tight loop）的性能，例如数学内核函数中的循环。例如，下面我测试对一列数字求和的速度：
+
+\begin{codebox}[python]
+def loop_sum(items):
+    total = 0
+    for i in items:
+        total += i
+    return total
+count = 1000
+delay = timeit.timeit(
+    setup="numbers = list(range(10_000))",
+    stmt="loop_sum(numbers)",
+    globals=globals(),
+    number=count,
+)
+print(f"{delay/count*1e9:.2f} nanoseconds")
+>>>
+142365.46 nanoseconds
+\end{codebox}
+
+这一测量结果是每次调用 \texttt{loop\_sum} 所花的时间，单看它本身并没有意义。要让这个微基准测试稳健，你需要用内层循环的迭代次数对它进行归一化，在上例中这个次数被硬编码为 \texttt{10\_000}：
+
+\begin{codebox}[python]
+print(f"{delay/count/10_000*1e9:.2f} nanoseconds")
+>>>
+14.43 nanoseconds
+\end{codebox}
+
+现在我可以看出，这个函数的耗时将随列表中元素数量成比例增长，每增加一个元素约 14.43 纳秒。
+
+\texttt{timeit} 模块还可以作为命令行工具执行，这能帮助你快速探究有关 Python 性能的任何疑问。例如，假设我想确定在字典中查找一个已存在键的最快方式（参见 Item 26（「处理缺失字典键时优先用 get 而非 in 和 KeyError」））。下面我使用 \texttt{timeit} 命令行界面来测试用 \texttt{in} 运算符实现这一目的：
+
+\begin{codebox}[python]
+$ python3 -m timeit \
+--setup='my_dict = {"key": 123}' \
+'if "key" in my_dict: my_dict["key"]'
+20000000 loops, best of 5: 19.3 nsec per loop
+\end{codebox}
+
+该工具会根据单次迭代所花的时间自动确定要运行多少次迭代。它还会运行五组独立测试以抵消系统噪声，并将最小值作为最佳情况、下限性能呈现出来。
+
+我可以再次运行该工具，换一段不同的代码片段，来看看 \texttt{dict.get} 方法与 \texttt{in} 运算符相比如何：
+
+\begin{codebox}[python]
+$ python3 -m timeit \
+--setup='my_dict = {"key": 123}' \
+'if (value := my_dict.get("key")) is not None: value'
+20000000 loops, best of 5: 17.1 nsec per loop
+\end{codebox}
+
+现在我知道 \texttt{get} 比 \texttt{in} 更快。那么捕获已知异常类型这种在 Python 程序中常见的写法又如何呢（参见 Item 32（「优先抛出异常而非返回 None」））？
+
+\begin{codebox}[python]
+$ python3 -m timeit \
+--setup='my_dict = {"key": 123}' \
+'try: my_dict["key"]
+except KeyError: pass'
+20000000 loops, best of 5: 10.6 nsec per loop
+\end{codebox}
+
+结果表明，对于那些预期已存在于字典中的键，\texttt{KeyError} 这种写法实际上是最快的。考虑到在键缺失的情况下，引发并捕获异常需要额外的机制，这或许令人意外。这种非显而易见的性能表现说明了，在优化 Python 代码之前，检验自己的假设、使用性能剖析和微基准测试来进行度量为何如此重要。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 内置的 \texttt{timeit} 模块可用于运行微基准测试，帮助你以科学的方式确定程序中性能关键部分的最佳数据结构和算法。
+\item 为了让微基准测试稳健，应使用 \texttt{setup} 代码片段来排除初始化时间，并确保将返回的测量结果归一化为可比较的指标。
+\item \texttt{python -m timeit} 命令行界面让你几乎不费力气就能快速了解 Python 代码片段的性能。
+\end{itemize}
+
+\section{Item 94: 了解何时以及如何用其他编程语言替代 Python}
+
+在使用 Python 的过程中，你可能迟早会觉得它在能力上已达极限。这是可以理解的，因为为了提供 Python 所增强的开发者生产力和易用性，该语言的执行模型必须在其他方面有所限制。例如，CPython 实现的字节码（bytecode）虚拟机和全局解释器锁（GIL）会对直线型 CPU 性能、CPU 并行能力、程序启动时间以及整体效率产生负面影响（参见 Item 68（「用线程处理阻塞式 I/O；不要用它做并行」））。一种潜在的解决方案是将你的全部代码用另一种编程语言重写，从而远离 Python。在许多情况下，这可能是正确的选择，包括：
+
+\begin{itemize}
+\item 你的首要目标是关键路径延迟或第 99 百分位（99th percentile）延迟，并且你无法容忍垃圾回收（GC）停顿或非确定性的数据结构行为（例如字典扩容）。
+\item 你非常在意程序启动延迟，而预编译、zip 导入（zip import）和延迟模块加载等技术都无法满足需求（参见 Item 97（「依靠预编译字节码与文件系统缓存来缩短启动时间」）和 Item 98（「用动态导入惰性加载模块以减少启动时间」））。
+\item 你需要利用那些与实现语言紧密耦合的库（例如特定平台的 GUI 框架），而通过 C 扩展来桥接又不切实际（详见下文）。你需要面向超级计算机或嵌入式系统等不常见的架构，而支持这些环境的 Python 包（例如 https://mpi4py.github.io 和 https://micropython.org）又不够用。
+\item 你需要将程序作为可安装的 executable（可执行文件）分发，而打包（bundling）工具（参见 Item 125（「打包 Python 程序时优先选择开源项目，而非 zipimport 和 zipapp」））又无法满足你的需求。
+\item 你已经尝试过下文列出的所有优化技术，以及能够获得更好性能的 Python 语言替代实现（例如 PyPy：https://www.pypy.org），却仍然触及性能天花板。
+\item 你已经尝试过将计算分布到同一台机器上的多个 Python 进程（参见 Item 79（「考虑用 concurrent.futures 实现真正的并行」）），或使用 \texttt{Dask}（https://www.dask.org）等工具跨多台计算机分布计算，却无济于事。
+\end{itemize}
+
+然而，在你决定对已经构建的软件进行整体重写之前，重要的是要考虑采用多种技术手段进行精准优化，这些手段各有独特的权衡。能够做到什么程度，很大程度上取决于你拥有多少 Python 代码、代码有多复杂、你面临的约束条件，以及你需要满足的需求。
+
+Python 程序中遇到的许多性能问题都源于不显眼的原因。对你的代码进行性能剖析和基准测试非常重要（参见 Item 92（「优化前先做性能剖析」）和 Item 93（「使用 timeit 微基准测试优化性能关键代码」）），以便找到缓慢或内存消耗过高的真正根源（参见 Item 115（「使用 tracemalloc 理解内存使用与泄漏」））。你还应当认真研究，用更好的替代方案替换程序的核心算法和数据结构（参见 Item 104（「了解如何使用 heapq 实现优先队列」）和 Item 102（「考虑用 bisect 搜索已排序序列」）），这能以出奇之小的代价将程序性能提升好几个数量级。
+
+一旦你已穷尽这些途径，迁移到另一种编程语言或执行模型可以通过多种方式来达成。例如，Python 中一个常见的性能问题来源是紧凑循环，你经常在数学校内核函数中见到它。下面这段计算两个向量点积（dot product）的 Python 代码，运行速度会比用 C 实现的类似行为慢好几个数量级：
+
+\begin{codebox}[python]
+def dot_product(a, b):
+    result = 0
+    for i, j in zip(a, b):
+        result += i * j
+    return result
+print(dot_product([1, 2], [3, 4]))
+>>>
+11
+\end{codebox}
+
+幸运的是，像这样的内核函数也定义了一个清晰的接口，可作为程序中慢速部分与快速部分之间的一道接缝。如果你能找到办法加速 \texttt{dot\_product} 函数的内部实现，那么它的所有调用者都能受益，而无需你对代码库做任何其他改动。如果你的程序结构合适，同样的方法也适用于大得多的子组件。标准版 Python（参见 Item 1（「了解你正在使用的 Python 版本」））提供了两种工具，能以这种方式帮助提升性能：
+
+\begin{itemize}
+\item 内置的 \texttt{ctypes} 模块能轻松描述你系统上原生（native）库的接口并调用它们导出的函数（详见 Item 95（「考虑用 ctypes 快速集成原生库」））。这些库可以用任何兼容 C 调用约定（calling convention）的语言实现（例如 C、C++、Rust），并且可以利用原生线程、SIMD 内建指令、GPU 等。无需额外的构建系统、编译器或打包工具。
+\item Python 的 C 扩展（extension）API 允许你创建完全 Pythonic 的 API——充分利用 Python 的全部动态特性——而其实际实现是用 C 编写的，从而获得更好的性能（详见 Item 96（「考虑用扩展模块最大化性能与易用性」））。这种方式通常需要更多的前期工作，但能带来大幅改善的易用性。不过，你将不得不应对额外的构建复杂性，而这可能是困难的。
+\end{itemize}
+
+更广阔的 Python 生态系统也通过创建优秀的库和工具来回应性能优化的需求。下面是你应当了解的几个亮点，尽管还有许多其他选择（参见 Item 116（「了解在哪里寻找社区构建的模块」））：
+
+\begin{itemize}
+\item \texttt{NumPy} 模块（https://numpy.org）让你能够以符合人体工学的 Python 函数调用对数值数组进行操作，这些调用在底层使用 BLAS（Basic Linear Algebra Subprograms，基础线性代数子程序）来实现高性能与 CPU 并行。为了使用它，你需要重写一部分数据结构，但带来的加速可能极为显著。
+\item \texttt{Numba} 模块（https://numba.pydata.org）接收你已有的 Python 函数，并在运行时对其进行 JIT（just-in-time，即时）编译，生成高度优化的机器指令。你的一些代码可能需要稍作修改，以减少动态特性并使用更简单的数据类型。与 \texttt{ctypes} 类似，\texttt{Numba} 避免了额外的构建复杂性，这是一个巨大的优势。
+\item \texttt{Cython} 工具（https://cython.org）提供了 Python 语言的超集，带有额外的特性，让你无需真正编写 C 代码就能轻松创建 C 扩展模块。它拥有与标准 C 扩展相同的构建复杂性，但比 Python C API 更易使用。
+\item \texttt{Mypyc}（https://github.com/mypyc/mypyc）与 \texttt{Cython} 类似，但它使用 \texttt{typing} 模块中的标准注解（参见 Item 124（「考虑通过 typing 进行静态分析以消除缺陷」）），而无需非标准语法。这使得无需改动代码即可更容易地采用它。它还能以 AOT（ahead-of-time，提前）方式编译整个程序，从而获得更快的启动时间。\texttt{Mypyc} 的构建复杂性与 C 扩展相当，并且不包含 \texttt{Cython} 的 C 集成特性。
+\item \texttt{CFFI} 模块（https://cffi.readthedocs.io）与内置的 \texttt{ctypes} 模块类似，不同之处在于它能直接读取 C 头文件，从而理解你想要调用的函数的接口。这种自动映射显著减少了开发者在调用包含大量函数和数据结构的原生库时所付出的辛苦。
+\item \texttt{SWIG}（https://www.swig.org）是一个能为 C 和 C++ 原生库自动生成 Python 接口的工具。它在这一点上与 \texttt{CFFI} 类似，但翻译是显式发生的，而非在运行时，这可能更高效。\texttt{SWIG} 支持除 Python 之外的其他目标语言以及多种自定义选项。它同样需要像 C 扩展那样的构建复杂性。
+\end{itemize}
+
+需要注意的一个重要告诫是，这些工具和库可能需要相当数量的开发者时间去学习和有效使用。用另一种语言从头重写程序的某些组件可能更容易，特别是考虑到 Python 在粘合系统方面如此出色。你可以利用从构建 Python 实现中学到的经验，来指导重写的设计。
+
+话虽如此，用 C（或其他语言）重写你的任何 Python 代码同样代价高昂。在 Python 中简短易懂的代码，到了其他语言里可能变得冗长而复杂。移植还需要大量测试，以确保功能与原 Python 代码保持等价，且没有引入新的缺陷（bug）。
+
+有时重写是值得的，这也解释了 Python 社区中为何存在大量 C 扩展模块生态，用以加速文本解析、图像合成和矩阵运算等任务。对于你自己的代码，你需要权衡风险与潜在回报，并决定适合你情况的最佳折中方案。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 用另一种语言重写 Python 代码有许多正当理由，但在采取这一方案之前，你应当先调研所有可用的优化技术。
+\item 将 CPU 瓶颈转移到 C 扩展模块和原生库，是在最大化你对 Python 代码投入的同时提升性能的有效途径。然而，这样做代价高昂，并可能引入缺陷（bug）。
+\item Python 生态系统中存在大量工具和库，能用出奇之少的改动加速 Python 程序中缓慢的部分。
+\end{itemize}
+
+\section{Item 95: 考虑用 ctypes 快速集成原生库}
+
+\texttt{ctypes} 内置模块使 Python 能够调用在原生库（native library）中定义的函数。这些库可以用任何能够按照 C 调用约定（C calling convention）导出函数的其他编程语言来实现（例如 C、C++、Rust）。该模块为 Python 开发者提供了两个关键好处：
+
+\begin{itemize}
+\item ctypes 让使用 Python 把各个系统连接在一起变得容易。如果已经存在一个具有你所需功能的原生库，你几乎不费力气就能使用它。
+\item ctypes 提供了一条优化程序里慢速部分的直接途径。如果你发现一个无法用其他方式加速的热点（hotspot），你可以用另一种语言重新实现它，然后再通过 ctypes 调用这个更快的版本。
+\end{itemize}
+
+例如，考虑上一个条目中的 \texttt{dot\_product} 函数（参见 Item 94「了解何时以及如何用另一种编程语言替换 Python」）：
+
+\begin{codebox}[python]
+def dot_product(a, b):
+    result = 0
+    for i, j in zip(a, b):
+        result += i * j
+    return result
+\end{codebox}
+
+我可以用一个操作数组的简单 C 函数来实现类似的功能。这里我定义接口：
+
+\begin{codebox}[python]
+/* my_library.h */
+extern double dot_product(int length, double* a, double* b);
+\end{codebox}
+
+实现很简单，并且会被大多数 C 编译器自动向量化，以利用 SIMD（单指令多数据，single instruction, multiple data）这类高级处理器特性来最大化性能：
+
+\begin{codebox}[python]
+/* my_library.c */
+#include <stdio.h>
+#include "my_library.h"
+double dot_product(int length, double* a, double* b) {
+    double result = 0;
+    for (int i = 0; i < length; i++) {
+        result += a[i] * b[i];
+    }
+    return result;
+}
+\end{codebox}
+
+现在我需要把这段代码编译成一个库文件。具体做法超出了本书的范围，但在我的机器上所用的命令是：
+
+\begin{codebox}[python]
+$ cc -shared -o my_library.lib my_library.c
+\end{codebox}
+
+在 Python 中加载这个库文件很简单，只需把它的路径传给 \texttt{ctypes.cdll.LoadLibrary} 构造函数即可：
+
+\begin{codebox}[python]
+import ctypes
+library_path = ...
+my_library = ctypes.cdll.LoadLibrary(library_path)
+\end{codebox}
+
+用 C 实现的 \texttt{dot\_product} 函数现在作为 \texttt{my\_library} 的一个属性可用了：
+
+\begin{codebox}[python]
+print(my_library.dot_product)
+>>>
+<_FuncPtr object at 0x10544cc50>
+\end{codebox}
+
+如果你用 \texttt{ctypes.CFUNCTYPE} 对象来包装导入的函数指针，可能会因为隐式类型转换而观察到异常行为。相反，最好的做法是直接把导入函数的 \texttt{restype} 和 \texttt{argtypes} 属性赋值为与该函数原生实现的签名相匹配的 \texttt{ctypes} 类型：
+
+\begin{codebox}[python]
+my_library.dot_product.restype = ctypes.c_double
+vector_ptr = ctypes.POINTER(ctypes.c_double)
+my_library.dot_product.argtypes = (
+    ctypes.c_int,
+    vector_ptr,
+    vector_ptr,
+)
+\end{codebox}
+
+调用这个导入的函数相对容易。首先，我定义一个包含三个 double 值的数组数据类型。然后我分配该类型的两个实例，作为实参传入：
+
+\begin{codebox}[python]
+size = 3
+vector3 = ctypes.c_double * size
+a = vector3(1.0, 2.5, 3.5)
+b = vector3(-7, 4, -12.1)
+\end{codebox}
+
+最后，我用这两个数组调用导入的 \texttt{dot\_product} 函数。我需要使用 \texttt{ctypes.cast} 辅助函数，以确保传入的是数组首元素的地址（符合 C 约定），而不是 \texttt{vector3} Python 对象的地址。我不需要对返回值做任何类型转换，因为 \texttt{ctypes} 会自动把它转换为一个 Python 值：
+
+\begin{codebox}[python]
+result = my_library.dot_product(
+    3,
+    ctypes.cast(a, vector_ptr),
+    ctypes.cast(b, vector_ptr),
+)
+print(result)
+>>>
+-39.35
+\end{codebox}
+
+到现在应该已经很明显，\texttt{ctypes} API 的人体工程学（ergonomics）相当差，也不够 Pythonic。但令人印象深刻的是，一切如此之快就整合起来并运转起来了。为了让它用起来更自然，这里我用 Python 函数来包装导入的原生函数，完成数据类型映射并验证假设（背景参见 Item 81「用 \texttt{assert} 断言内部假设，用 \texttt{raise} 抛出未达预期」）：
+
+\begin{codebox}[python]
+def dot_product(a, b):
+    size = len(a)
+    assert len(b) == size
+    a_vector = vector3(*a)
+    b_vector = vector3(*b)
+    result = my_library.dot_product(size, a_vector, b_vector)
+    return result
+result = dot_product([1.0, 2.5, 3.5], [-7, 4, -12.1])
+print(result)
+>>>
+-39.35
+\end{codebox}
+
+或者，我也可以使用 Python 的 C 扩展 API（参见 Item 96「考虑用扩展模块最大化性能与人体工程学」）来提供一个兼具原生性能、更加 Pythonic 的接口。然而，与 C 扩展相比，\texttt{ctypes} 还是有一些值得称道的优势：
+
+\begin{itemize}
+\item 你用 ctypes 持有的指针值，当 Python 对象的引用计数（reference count）降为零时会自动释放。C 扩展必须对 C 指针做手动内存管理，并对 Python 对象做手动引用计数。
+\item 当你用 ctypes 调用函数时，它会在调用执行期间自动释放 GIL（全局解释器锁，Global Interpreter Lock），从而让其他 Python 线程并行推进（参见 Item 68「用线程处理阻塞式 I/O，不要用于并行计算」）。而 C 扩展模块必须显式管理 GIL，并且在未持有该锁时功能受到限制。
+\item 使用 ctypes 时，你只需提供磁盘上共享对象或动态库的路径，它就能被加载。编译可以借助你已有的构建系统单独进行。而使用 Python C 扩展时，你需要借助 Python 的构建系统来包含正确的路径、设置链接器标志等等；这会带来大量复杂性，且可能重复劳动。
+\end{itemize}
+
+不过，使用 \texttt{ctypes} 模块而非构建 C 扩展，也有一些重要的弊端：
+
+\begin{itemize}
+\item ctypes 把你限制在 C 能够描述的数据类型之内。你失去了 Python 大部分的表达能力，包括像迭代器（参见 Item 21「遍历参数时要保持防御性」）和鸭子类型（参见 Item 25「依赖字典插入顺序时要保持谨慎」）这类极为常见的功能。即便用了包装函数，用 ctypes 导入的原生函数对 Python 程序员来说依然可能显得怪异，从而降低生产力。
+\item 用正确的数据类型调用 ctypes，常常需要你对函数的输入和输出做拷贝或转换。这种开销的成本可能会抵消使用原生库带来的性能收益，使整个优化努力变得毫无价值。C 扩展允许你绕过拷贝；唯一的性能上限就是底层数据类型本身固有的性能。
+\item 如果你用 ctypes 的方式略有偏差，就可能导致程序破坏自身内存并出现怪异行为。例如，如果在函数参数或返回值处本应指定 \texttt{ctypes.c\_int} 却不小心用了 \texttt{ctypes.c\_double}，你可能会遇到带有晦涩错误信息的、不可预测的崩溃。内置的 \texttt{faulthandler} 模块可以帮助定位这些问题，但它们仍然难以调试。
+\end{itemize}
+
+使用 \texttt{ctypes} 的最佳实践是：在把它投入更复杂的代码之前，始终先编写相应的单元测试（参见 Item 109「优先写集成测试而非单元测试」）。这些测试的目标是覆盖你所调用库的基本外部接口，以确认它在简单用法下能按预期工作。这能帮你发现诸如这样的情况：共享库里某个函数的参数类型被修改了，而你的 \texttt{ctypes} 用法却没有同步更新。这里我对导入库中的 \texttt{my\_library.dot\_product} 符号进行测试：
+
+\begin{codebox}[python]
+from unittest import TestCase
+class MyLibraryTest(TestCase):
+    def test_dot_product(self):
+        vector3 = ctypes.c_double * size
+        a = vector3(1.0, 2.5, 3.5)
+        b = vector3(-7, 4, -12.1)
+        vector_ptr = ctypes.POINTER(ctypes.c_double)
+        result = my_library.dot_product(
+            3,
+            ctypes.cast(a, vector_ptr),
+            ctypes.cast(b, vector_ptr),
+        )
+        self.assertAlmostEqual(-39.35, result)
+...
+>>>
+.
+--------------------------------------------------------------
+--------
+Ran 1 test in 0.000s
+OK
+\end{codebox}
+
+\texttt{ctypes} 模块还包含更多功能，用于把 Python 对象映射到 C 结构体、拷贝内存、做错误检查等等（完整手册详见 https://docs.python.org/3/library/ctypes.html）。最终，你需要自己判断：使用 \texttt{ctypes} 带来的开发便利与速度，是否值得它那较差的人体工程学与额外开销。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 内置的 ctypes 模块让把其他语言编写的原生库的功能与性能集成进 Python 程序变得容易。
+\item 与 Python C 扩展 API 相比，ctypes 能在不引入额外构建复杂性的前提下实现快速开发。
+\item 用 ctypes 编写 Pythonic 的 API 很困难，因为可用的数据类型与协议被限制为 C 所能表达的范围。
+\end{itemize}
+
+\section{Item 96: 用扩展模块兼顾性能与易用性}
+
+Python 语言的 \texttt{CPython} 实现（见 Item 1（「知道你正在使用的 Python 版本」））支持用 C 编写的扩展模块（extension module）。这些模块可以直接使用 Python API 来利用面向对象的特性（见第 7 章）、鸭子类型（duck typing）协议（见 Item 25（「依赖字典插入顺序时需谨慎」））、引用计数（reference counting）垃圾回收，以及几乎其他所有让 Python 强大的特性。前一条目（见 Item 95（「考虑用 \texttt{ctypes} 快速集成原生库」））介绍了内置（built-in）模块 \texttt{ctypes} 的优缺点。如果你想在不牺牲性能或平台特定能力的前提下，提供地道的 Python（Pythonic）开发体验，扩展模块是不二之选。
+
+尽管创建扩展模块比使用 \texttt{ctypes} 复杂得多，但 Python C API 让这件事变得相当直接。为了演示，我将实现之前那个相同的 \texttt{dot\_product} 函数（见 Item 94（「知道何时以及如何用其他编程语言替换 Python」）），只不过这次是作为扩展模块来实现。
+
+首先，我会声明希望该扩展提供的 C 函数：
+
+\begin{codebox}[c]
+/* my_extension.h */
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+PyObject *dot_product(PyObject *self, PyObject *args);
+\end{codebox}
+
+然后我用 C 实现这个函数。我用来对接输入和输出的 Python API（例如 \texttt{PyList\_Size}、\texttt{PyFloat\_FromDouble}）非常丰富、持续演进，而且——幸运的是——文档完善（见 https://docs.python.org/3/extending）。这个版本的函数期望接收两个等长的浮点数列表，并返回一个浮点数：
+
+\begin{codebox}[c]
+/* dot_product.c */
+#include "my_extension.h"
+PyObject *dot_product(PyObject *self, PyObject *args)
+{
+    PyObject *left, *right;
+    if (!PyArg_ParseTuple(args, "OO", &left, &right)) {
+        return NULL;
+    }
+    if (!PyList_Check(left) || !PyList_Check(right)) {
+         PyErr_SetString(PyExc_TypeError,
+"Both arguments must be lists");
+        return NULL;
+    }
+    Py_ssize_t left_length = PyList_Size(left);
+    Py_ssize_t right_length = PyList_Size(right);
+    if (left_length == -1 || right_length == -1) {
+        return NULL;
+    }
+    if (left_length != right_length) {
+         PyErr_SetString(PyExc_ValueError,
+"Lists must be the same length");
+        return NULL;
+    }
+    double result = 0;
+    for (Py_ssize_t i = 0; i < left_length; i++) {
+        PyObject *left_item = PyList_GET_ITEM(left, i);
+        PyObject *right_item = PyList_GET_ITEM(right, i);
+        double left_double = PyFloat_AsDouble(left_item);
+        double right_double = PyFloat_AsDouble(right_item);
+        if (PyErr_Occurred()) {
+            return NULL;
+        }
+        result += left_double * right_double;
+    }
+    return PyFloat_FromDouble(result);
+}
+\end{codebox}
+
+这个函数大约有 40 行代码，是用 \texttt{ctypes} 模块就能调用的简单 C 实现长度的 4 倍。此外还需要一些额外的样板代码来配置并初始化扩展模块：
+
+\begin{codebox}[c]
+/* init.c */
+#include "my_extension.h"
+static PyMethodDef my_extension_methods[] = {
+    {
+        "dot_product",
+        dot_product,
+        METH_VARARGS,
+        "Compute dot product",
+    },
+    {
+        NULL,
+        NULL,
+        0,
+        NULL,
+    },
+};
+static struct PyModuleDef my_extension = {
+    PyModuleDef_HEAD_INIT,
+    "my_extension",
+    "My C-extension module",
+    -1,
+    my_extension_methods,
+};
+PyMODINIT_FUNC
+PyInit_my_extension(void)
+{
+    return PyModule_Create(&my_extension);
+}
+\end{codebox}
+
+现在我需要把 C 代码编译成一个能被 \texttt{CPython} 解释器动态加载的原生库。最简单的方法是定义一个最简的 \texttt{setup.py} 配置文件：
+
+\begin{codebox}[python]
+# setup.py
+from setuptools import Extension, setup
+setup(
+    name="my_extension",
+    ext_modules=[
+        Extension(
+            name="my_extension",
+            sources=["init.c", "dot_product.c"],
+        ),
+    ],
+)
+\end{codebox}
+
+我可以使用这个配置文件、一个虚拟环境（virtual environment）（见 Item 117（「使用虚拟环境获得隔离且可复现的依赖」）），以及 \texttt{setuptools} 包（见 Item 116（「知道去哪里寻找社区构建的模块」）），用正确的路径和标志恰当地驱动系统的编译器；最终我会得到一个能被 Python 导入的原生库文件：
+
+\begin{codebox}[bash]
+$ python3 -m venv .
+$ source bin/activate
+$ pip install setuptools
+...
+$ python3 setup.py develop
+...
+\end{codebox}
+
+构建 Python 扩展模块并将其打包分发的办法有很多。遗憾的是，相关的工具一直在不断变化。在这个示例中，我只在本地开发环境中让一个扩展模块跑起来。如果你遇到问题或有其他使用场景，请务必查阅官方 Python 打包管理机构（Python Packaging Authority）的最新文档（https://www.pypa.io）。
+
+编译完成后，我可以用 Python 编写的测试（见 Item 108（「在 \texttt{TestCase} 子类中验证相关行为」））来验证扩展模块是否按预期工作：
+
+\begin{codebox}[python]
+# my_extension_test.py
+import unittest
+import my_extension
+class MyExtensionTest(unittest.TestCase):
+    def test_empty(self):
+        result = my_extension.dot_product([], [])
+        self.assertAlmostEqual(0, result)
+    def test_positive_result(self):
+        result = my_extension.dot_product(
+            [3, 4, 5],
+            [-1, 9, -2.5],
+        )
+        self.assertAlmostEqual(20.5, result)
+    ...
+if __name__ == "__main__":
+    unittest.main()
+\end{codebox}
+
+与基本的 C 实现相比，这要费力得多。而且接口的易用性（ergonomics）和我使用 \texttt{ctypes} 模块时差不多：\texttt{dot\_product} 的两个参数都必须是包含浮点数的列表。如果你使用 C 扩展 API 只打算做到这一步，那就不值得。你并没有用到它最有价值的特性。
+
+现在我要创建这个扩展模块的另一个版本，它使用 Python API 提供的迭代器（iterator）协议和数字（number）协议。这有 60 行代码——比更简单的 \texttt{dot\_product} 函数多 50\%，比基本 C 版本多 6 倍——但它启用了让 Python 如此强大的全套特性。
+
+通过使用 \texttt{PyObject\_GetIter} 和 \texttt{PyIter\_Next} 这两个 API，输入类型可以是任何可迭代对象（iterable）容器，例如元组、列表、生成器（generator）等（见 Item 21（「迭代参数时要保持防御性」））。通过使用 \texttt{PyNumber\_Multiply} 和 \texttt{PyNumber\_Add} 这两个 API，迭代器中的值可以是任何正确实现了数字特殊方法（special method）的对象（见 Item 57（「从 \texttt{collections.abc} 的类继承来自定义容器类型」））：
+
+\begin{codebox}[c]
+/* dot_product.c */
+#include "my_extension2.h"
+PyObject *dot_product(PyObject *self, PyObject *args)
+{
+    PyObject *left, *right;
+    if (!PyArg_ParseTuple(args, "OO", &left, &right)) {
+        return NULL;
+    }
+    PyObject *left_iter = PyObject_GetIter(left);
+    if (left_iter == NULL) {
+        return NULL;
+    }
+    PyObject *right_iter = PyObject_GetIter(right);
+    if (right_iter == NULL) {
+        Py_DECREF(left_iter);
+        return NULL;
+    }
+    PyObject *left_item = NULL;
+    PyObject *right_item = NULL;
+    PyObject *multiplied = NULL;
+    PyObject *result = PyLong_FromLong(0);
+    while (1) {
+        Py_CLEAR(left_item);
+        Py_CLEAR(right_item);
+        Py_CLEAR(multiplied);
+        left_item = PyIter_Next(left_iter);
+        right_item = PyIter_Next(right_iter);
+        if (left_item == NULL && right_item == NULL) {
+            break;
+        } else if (left_item == NULL || right_item == NULL) {
+             PyErr_SetString(PyExc_ValueError,
+"Arguments had unequal length");
+            break;
+        }
+        multiplied = PyNumber_Multiply(left_item, right_item);
+        if (multiplied == NULL) {
+            break;
+        }
+        PyObject *added = PyNumber_Add(result, multiplied);
+        if (added == NULL) {
+            break;
+        }
+        Py_CLEAR(result);
+        result = added;
+    }
+    Py_CLEAR(left_item);
+    Py_CLEAR(right_item);
+    Py_CLEAR(multiplied);
+    Py_DECREF(left_iter);
+    Py_DECREF(right_iter);
+    if (PyErr_Occurred()) {
+        Py_CLEAR(result);
+        return NULL;
+    }
+    return result;
+}
+\end{codebox}
+
+由于需要恰当地管理对象引用计数（reference count），以及错误传播和借用引用（reference borrowing）的特殊性，实现变得更加复杂。但结果或许正是 Python 的圣杯：一个既快又好用的模块。这里我展示它对多种可迭代对象以及 \texttt{Decimal} 数值类（见 Item 106（「精度至上时使用 \texttt{decimal}」））都能工作：
+
+\begin{codebox}[python]
+# my_extension2_test.py
+import unittest
+import my_extension2
+class MyExtension2Test(unittest.TestCase):
+    def test_decimals(self):
+        import decimal
+        a = [decimal.Decimal(1), decimal.Decimal(2)]
+        b = [decimal.Decimal(3), decimal.Decimal(4)]
+        result = my_extension2.dot_product(a, b)
+        self.assertEqual(11, result)
+    def test_not_lists(self):
+        result1 = my_extension2.dot_product(
+            (1, 2),
+            [3, 4],
+        )
+        result2 = my_extension2.dot_product(
+            [1, 2],
+            (3, 4),
+        )
+        result3 = my_extension2.dot_product(
+            range(1, 3),
+            range(3, 5),
+        )
+        self.assertAlmostEqual(11, result1)
+        self.assertAlmostEqual(11, result2)
+        self.assertAlmostEqual(11, result3)
+    ...
+if __name__ == "__main__":
+    unittest.main()
+\end{codebox}
+
+一个 API 能达到这种程度的可扩展性与灵活性，正是良好易用性的体现。要用基本 C 代码实现同样的行为，本质上需要重新实现 Python 解释器和 API 的核心。考虑到你换来的功能与性能，这些扩展模块行数更多也就显得合理了。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 扩展模块用 C 编写，以原生速度执行，并可以使用 Python API 来访问几乎全部 Python 的强大特性。
+\item Python API 的特殊性，包括内存管理和错误传播，可能难以学习且难以做对。
+\item C 扩展最大的价值来自使用 Python API 的协议和内置数据类型，而这些在简单 C 代码中难以复制。
+\end{itemize}
+
+\section{Item 97: 依靠预编译字节码与文件系统缓存来缩短启动时间}
+
+程序的启动时间是一项值得关注的重要性能指标，因为它能被用户直接感知。对于命令行工具而言，启动时间是指从你按下回车键到程序开始处理所需的时间。用户常常会连续、快速地重复执行同一个命令行工具，因此启动延迟的累积会让人感到是在白白浪费时间，非常恼人。对于 Web 服务器，启动时间是指程序启动后开始处理第一个到达的请求所需的时间。Web 服务器通常会使用多个线程或子进程来并行处理工作，这导致每次新建一个执行环境时都可能产生冷启动延迟。最终的结果是，某些 Web 请求所耗费的时间会远远长于其他请求，用不可预测的延迟让用户体验糟糕。
+
+遗憾的是，与那些被编译为机器码可执行文件的语言所编写的程序相比，Python 程序的启动时间通常较长。在 CPython 对 Python 的实现中，造成这种缓慢主要有两个因素（参见 Item 1（「了解你所使用的 Python 版本」））。首先，在启动时，CPython 会读取程序的源代码，并将其编译成字节码（bytecode），供其虚拟机（virtual machine）解释器执行，这一过程既需要 I/O 也需要 CPU 处理（细节参见 Item 68（「将线程用于阻塞式 I/O；不要在并行中使用」））。其次，当字节码准备就绪后，Python 会执行主入口点所导入的所有模块。加载模块需要运行代码来初始化全局变量和常量、定义类、执行断言语句，等等——这可能是一项繁重的工作。
+
+为了提升性能，模块在第一次被程序加载后会被缓存到内存中，并在后续加载时复用（细节参见 Item 122（「了解如何打破循环依赖」））。CPython 还会在编译期间将生成的字节码保存到磁盘上的缓存中，以便后续程序启动时复用。该缓存存储在与源代码相邻的、名为 \texttt{\_\_pycache\_\_} 的目录中。每个字节码文件都有一个 \texttt{.pyc} 后缀，并且通常比对应的源文件更小。
+
+亲自观察字节码缓存的效果很容易。例如，这里我从 Django Web 框架（https://www.djangoproject.com）加载所有模块，并测量所耗费的时间（具体是 \texttt{real} 时间）。这是该开源项目仅含源代码的快照，并且不存在任何字节码缓存文件：
+
+\begin{codebox}[python]
+$ time python3 -c 'import django_all'
+...
+real    0m0.791s
+user    0m0.495s
+sys     0m0.145s
+\end{codebox}
+
+如果我对同一个程序不做任何改动再次运行，它的启动时间会缩短 70\%——速度提升了三倍以上：
+
+\begin{codebox}[python]
+$ time python3 -c 'import django_all'
+...
+real    0m0.225s
+user    0m0.182s
+sys     0m0.038s
+\end{codebox}
+
+你可能会猜测，这次性能提升是因为 CPython 在程序第二次启动时使用了字节码缓存。然而，如果我删掉 \texttt{.pyc} 文件，性能出人意料地仍然比我第一次执行 Python 并导入这个模块时更好：
+
+\begin{codebox}[python]
+$ find django -name '*.pyc' -delete
+$ time python3 -c 'import django_all'
+real    0m0.613s
+user    0m0.502s
+sys     0m0.101s
+\end{codebox}
+
+这很好地说明了性能测量有多么困难，也说明了优化的效果可能令人困惑。在没有 \texttt{.pyc} 文件的情况下，后续 Python 调用之所以更快，是因为操作系统（operating system）的文件系统缓存。由于我刚刚访问过这些 Python 源代码文件，它们已经在内存中了。当我再次加载它们时，昂贵的 I/O 操作得以缩短，从而加快了程序启动。
+
+我可以通过使用内置的 \texttt{compileall} 模块来重新生成字节码文件。在使用 \texttt{pip} 安装包时（参见 Item 117（「使用虚拟环境以获得隔离且可复现的依赖关系」）），这一步通常会自动完成，以尽量缩短启动时间。不过，你也可以在需要时为自己的代码库手动创建新的字节码文件（例如，在部署到生产环境之前）：
+
+\begin{codebox}[python]
+$ python3 -m compileall django
+Listing 'django'...
+Compiling 'django/__init__.py'...
+Compiling 'django/__main__.py'...
+Listing 'django/apps'...
+Compiling 'django/apps/__init__.py'...
+Compiling 'django/apps/config.py'...
+Compiling 'django/apps/registry.py'...
+...
+\end{codebox}
+
+大多数操作系统都提供了清理文件系统缓存的方法，这会使后续的 I/O 操作转向物理磁盘而非内存。在这里，我强制清空缓存（使用 \texttt{purge} 命令），然后重新运行 \texttt{django\_all} 的导入，以观察字节码文件位于磁盘上而不在内存中时的性能影响：
+
+\begin{codebox}[python]
+$ sudo purge
+$ time python3 -c 'import django_all'
+...
+real    0m0.382s
+user    0m0.169s
+sys     0m0.085s
+\end{codebox}
+
+这个启动时间（382 毫秒）比既没有字节码、文件系统缓存又为空（791 毫秒）的情况更快，也比没有字节码、源代码缓存在内存中（613 毫秒）的情况更快，但它比字节码和源代码都位于内存中（225 毫秒）的情况更慢。归根结底，只要确保字节码已被预编译并处于文件系统缓存中，就能获得最佳的启动性能。正因如此，将 Python 程序放在 RAM 磁盘上会很有价值，这样无论访问模式如何，它们始终位于内存中。当你的计算机使用机械硬盘（spinning disk）时，这种效果会更加明显；我在这些测试中用的是 SSD（固态硬盘，solid-state drive）。当无法在内存中缓存时，其他缩短启动时间的方法或许也有价值（参见 Item 98（「使用动态导入惰性加载模块以缩短启动时间」））。
+
+最后，你或许会想，既然看起来字节码缓存就是 CPython 执行程序所需的全部，那干脆不提供源代码文件，运行 Python 程序是否会更快。确实可以。诀窍是在生成字节码时使用 \texttt{-b} 标志，这会让各个 \texttt{.pyc} 文件被放在源代码旁边，而不是放在 \texttt{\_\_pycache\_\_} 目录中。在这里，我相应地修改了 \texttt{django} 包，然后再次测试导入 \texttt{django\_all} 模块的速度：
+
+\begin{codebox}[python]
+$ find django -name '*.pyc' -delete
+$ python3 -m compileall -b django
+$ find django -name '*.py' -delete
+$ time python3 -c 'import django_all'
+...
+real    0m0.226s
+user    0m0.183s
+sys     0m0.037s
+\end{codebox}
+
+这种情形下的启动时间（226 毫秒）几乎与源代码文件也同时存在时完全一样。因此，删除源代码没有任何价值，除非你需要满足其他约束条件，例如尽量减少整体存储或系统内存的占用（相关示例参见 Item 125（「相比 \texttt{zipimport} 与 \texttt{zipapp}，打包 Python 程序时优先选择开源项目」））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item CPython 对 Python 的实现会把程序的源文件编译成字节码，随后在虚拟机中执行。
+\item 字节码会被缓存到磁盘上，这使得同一个程序的后续运行、或同一个模块的后续加载，能够避免再次编译字节码。
+\item 对于 CPython 而言，当程序的字节码文件被提前生成、并且已经缓存在操作系统的内存中时，可以获得最佳的启动时间性能。
+\end{itemize}
+
+\section{Item 98: 用动态导入延迟加载模块以减少启动时间}
+
+上一讲探讨了 Python 程序初始化为什么会很慢，并介绍了改善性能（参见 Item 97（"依靠预编译字节码与文件系统缓存来提升启动速度"））的方法。在遵循了这些最佳实践并进一步优化之后（参见 Item 92（"在优化前先做性能剖析"）），你的 Python 程序可能仍然让人觉得启动太慢。好在，还有一项技术值得一试：动态导入（dynamic import）。
+
+例如，假设我正在构建一个具备两项功能的图像处理工具。第一个模块（module）根据用户提供的设置来调整图像的亮度与对比度：
+
+\begin{codebox}[python]
+# adjust.py
+# 初始化很快
+...
+def do_adjust(path, brightness, contrast):
+    ...
+\end{codebox}
+
+第二个模块会对图像做智能化的增强，幅度由给定参数决定。为了演示一个贴近真实的情况，我假设这需要加载一个庞大的原生（native）图像处理库，因而初始化很慢：
+
+\begin{codebox}[python]
+# enhance.py
+# 初始化很慢
+...
+def do_enhance(path, amount):
+    ...
+\end{codebox}
+
+我可以用内置（built-in）的 \texttt{argparse} 模块把这些函数做成一个命令行工具。这里我使用了 \texttt{add\_subparsers} 特性，根据用户在命令行中指定的命令，要求传入不同的标志集合。\texttt{adjust} 命令接受 \texttt{--brightness} 和 \texttt{--contrast} 标志，而 \texttt{enhance} 命令只需要 \texttt{--amount} 标志：
+
+\begin{codebox}[python]
+# parser.py
+import argparse
+PARSER = argparse.ArgumentParser()
+PARSER.add_argument("file")
+sub_parsers = PARSER.add_subparsers(dest="command")
+enhance_parser = sub_parsers.add_parser("enhance")
+enhance_parser.add_argument("--amount", type=float)
+adjust_parser = sub_parsers.add_parser("adjust")
+adjust_parser.add_argument("--brightness", type=float)
+adjust_parser.add_argument("--contrast", type=float)
+\end{codebox}
+
+在 \texttt{main} 函数里，我先解析参数，然后相应地调用 \texttt{enhance} 与 \texttt{adjust} 两个模块：
+
+\begin{codebox}[python]
+# mycli.py
+import adjust
+import enhance
+import parser
+def main():
+    args = parser.PARSER.parse_args()
+    if args.command == "enhance":
+        enhance.do_enhance(args.file, args.amount)
+    elif args.command == "adjust":
+         adjust.do_adjust(
+    args.file, args.brightness, args.contrast)
+    else:
+        raise RuntimeError("Not reachable")
+if __name__ == "__main__":
+    main()
+\end{codebox}
+
+尽管这里的功能运行良好，但程序很慢。例如，我运行 \texttt{enhance} 命令，观察到它完成需要 1 秒多：
+
+\begin{codebox}[python]
+$ time python3 ./mycli.py my_file.jpg enhance --amount 0.8
+...
+real    0m1.089s
+user    0m0.035s
+sys     0m0.022s
+\end{codebox}
+
+如此长的执行时间，原因很可能在于 \texttt{enhance} 模块所依赖的那个庞大的原生图像处理库。我在 \texttt{adjust} 命令里并不会用到那个库，所以预期它会更快：
+
+\begin{codebox}[python]
+$ time python3 ./mycli.py my_file.jpg adjust --brightness
+'.3 --contrast -0.1
+...
+real    0m1.064s
+user    0m0.040s
+sys     0m0.016s
+\end{codebox}
+
+遗憾的是，\texttt{enhance} 与 \texttt{adjust} 两个命令看起来一样慢。仔细检查后我发现，问题在于为了符合 PEP 8 风格（参见 Item 2（"遵循 PEP 8 风格指南"）），我在主模块顶部导入了命令行工具可能用到的所有模块。在启动时，即便实际只会用到其中一部分功能，我的程序也要付出准备全部功能的计算代价。
+
+Python 的 CPython 实现（参见 Item 1（"弄清你正在使用的 Python 版本"））支持 \texttt{-X importtime} 标志，它可以直接测量模块加载的性能。我这里用它来诊断命令行工具变慢的原因：
+
+\begin{codebox}[python]
+$ python3 -X importtime mycli.py
+import time: self [us] | cumulative | imported package
+...
+import time:       553 |        553 | adjust
+import time:   1005348 |    1005348 | enhance
+...
+import time:      3347 |      14762 | parser
+\end{codebox}
+
+\texttt{self} 列显示了每个模块执行其全部全局语句（不含导入）所花的时间（以微秒计）。\texttt{cumulative} 列显示了加载每个模块（包括其全部依赖）所花的时间。显然，罪魁祸首就是 \texttt{enhance} 模块。
+
+一种解决办法是把导入依赖推迟到你真正需要使用时再进行。之所以可行，是因为除了在程序启动时用模块级的 \texttt{import} 语句之外，Python 还支持在运行时——也就是在函数内部——导入模块（这种动态特性的另一种用法见 Item 122（"了解如何打破循环依赖"））。这里我修改命令行工具，让它在命令分发之后，才在 \texttt{main} 函数内部导入 \texttt{adjust} 模块或 \texttt{enhance} 模块：
+
+\begin{codebox}[python]
+# mycli_faster.py
+import parser
+def main():
+    args = parser.PARSER.parse_args()
+    if args.command == "enhance":
+        import enhance  # 已修改
+        enhance.do_enhance(args.file, args.amount)
+    elif args.command == "adjust":
+        import adjust   # 已修改
+         adjust.do_adjust(
+    args.file, args.brightness, args.contrast)
+    else:
+        raise RuntimeError("Not reachable")
+if __name__ == "__main__":
+    main()
+\end{codebox}
+
+加上这个修改后，\texttt{adjust} 命令运行得非常快，因为可以跳过 \texttt{enhance} 的初始化：
+
+\begin{codebox}[python]
+$ time python3 ./mycli_faster.py my_file.jpg adjust
+'--brightness .3 --contrast -0.1
+...
+real    0m0.049s
+user    0m0.032s
+sys     0m0.013s
+\end{codebox}
+
+\texttt{enhance} 命令仍然和之前一样慢：
+
+\begin{codebox}[python]
+$ time python3 ./mycli_faster.py my_file.jpg enhance
+'--amount 0.8
+...
+real    0m1.059s
+user    0m0.036s
+sys     0m0.014s
+\end{codebox}
+
+我还可以用 \texttt{-X importtime} 来确认：当没有指定任何命令时，\texttt{adjust} 与 \texttt{enhance} 模块都不会被加载：
+
+\begin{codebox}[python]
+$ time python3 -X importtime ./mycli_faster.py -h
+import time: self [us] | cumulative | imported package
+...
+import time:      1118 |       6015 | parser
+...
+real    0m0.049s
+user    0m0.032s
+sys     0m0.013s
+\end{codebox}
+
+对于这类「完成单一任务后即终止」的命令行工具，延迟加载（lazy-loading）模块的效果非常好。但如果我想要降低 Web 应用冷启动（cold start）的延迟（latency）呢？理想情况下，只有用户真正请求某项功能时，才应当付出加载 \texttt{enhance} 模块的开销。所幸，同样的方法在请求处理器（request handler）内部同样适用。这里我创建一个 \texttt{flask} Web 应用，为每个功能各配一个处理器，并在其中动态导入相应的模块：
+
+\begin{codebox}[python]
+# server.py
+from flask import Flask, render_template, request
+app = Flask(__name__)
+@app.route("/adjust", methods=["GET", "POST"])
+def do_adjust():
+    if request.method == "POST":
+        the_file = request.files["the_file"]
+        brightness = request.form["brightness"]
+        contrast = request.form["contrast"]
+        import adjust   # 动态导入
+        return adjust.do_adjust(the_file, brightness, contrast)
+    else:
+        return render_template("adjust.html")
+@app.route("/enhance", methods=["GET", "POST"])
+def do_enhance():
+    if request.method == "POST":
+        the_file = request.files["the_file"]
+        amount = request.form["amount"]
+        import enhance  # 动态导入
+        return enhance.do_enhance(the_file, amount)
+    else:
+        return render_template("enhance.html")
+\end{codebox}
+
+当 \texttt{do\_enhance} 请求处理器在 Python 进程（process）中第一次执行时，它会导入 \texttt{enhance} 模块，并付出高达 1 秒的初始化代价。在之后对 \texttt{do\_enhance} 的调用中，\texttt{import enhance} 语句只会让 Python 进程验证该模块已被加载，然后将局部作用域（scope）中的 \texttt{enhance} 标识符绑定到对应的模块对象。
+
+你或许会以为动态 \texttt{import} 语句的代价很高，但其实没那么糟糕。这里我用内置（built-in）的 \texttt{timeit} 模块（参见 Item 93（"用 timeit 微基准测试优化性能关键代码"））来测量：对一个之前已经导入过的模块再次做动态导入，需要花费多少时间：
+
+\begin{codebox}[python]
+# import_perf.py
+import timeit
+trials = 10_000_000
+result = timeit.timeit(
+    setup="import enhance",
+    stmt="import enhance",
+    globals=globals(),
+    number=trials,
+)
+print(f"{result/trials * 1e9:2.1f} nanos per call")
+>>>
+52.8 nanos per call
+\end{codebox}
+
+为了让你对这个开销（52 纳秒）有个直观认识，下面是另一个示例：它用一个受锁保护的全局变量（lock-protected global variable）来替代动态 \texttt{import} 语句（这是在程序初始化期间，防止多个线程（thread）扎堆（dog-piling）的常用手段）：
+
+\begin{codebox}[python]
+# global_lock_perf.py
+import timeit
+import threading
+trials = 100_000_000
+initialized = False
+initialized_lock = threading.Lock()
+result = timeit.timeit(
+    stmt="""
+global initialized
+# 在无需加锁的情况下先做推测性检查
+if not initialized:
+    with initialized_lock:
+        # 持有锁后再做一次检查
+        if not initialized:
+            # 执行开销很大的初始化
+            ...
+            initialized = True
+""",
+    globals=globals(),
+    number=trials,
+)
+print(f"{result/trials * 1e9:2.1f} nanos per call")
+>>>
+5.5 nanos per call
+\end{codebox}
+
+动态导入版本的耗时是使用全局变量方式的十倍，所以它确实慢得多。在没有锁竞争（lock contention）的情况下——由于那条推测性的 \texttt{if not initialized} 语句，这种情况很常见——全局变量版本的运算速度与 Python 中把两个整数相加差不多。
+
+但动态导入版本的代码要简单得多，不需要任何样板代码（boilerplate）。你大概不会愿意把动态导入放进像内核函数（kernel function）内层循环那样 CPU 密集型（CPU-bound）的代码里（详见 Item 94（"了解何时及如何用另一种编程语言替换 Python"）），但每次 Web 请求只做一次，似乎就很合理了。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item CPython 的 \texttt{-X importtime} 标志会让 Python 程序打印出加载所导入模块及其依赖所花费的时间，从而便于诊断启动缓慢的原因。
+\item 模块可以在函数内部被动态导入，这使得我们有可能把依赖项代价高昂的初始化推迟到功能真正需要被使用时再进行。
+\item 动态导入一个模块并检查它之前是否已被加载，其开销大约相当于 20 次加法操作，因此只要它能显著改善冷启动的延迟（latency），这点增量代价就非常值得。
+\end{itemize}
+
+\section{Item 99: 考虑使用 memoryview 和 bytearray 与 bytes 实现零拷贝交互}
+
+尽管 Python 在没有额外付出的情况下无法并行化 CPU 密集型计算（参见 Item 79（"考虑使用 \texttt{concurrent.futures} 实现真正的并行"）以及 Item 94（"了解何时以及如何用其他编程语言替换 Python"）），但它能够以多种方式支持高吞吐量的并行 I/O（参见 Item 68（"对阻塞式 I/O 使用线程，不要用于并行"）以及 Item 75（"借助协程实现高并发 I/O"））。话虽如此，人们却很容易错误地使用 I/O 工具，从而得出这门语言即便对付 I/O 密集型工作负载也太慢的结论。
+
+举例来说，假设我正在构建一个媒体服务器，通过网络向用户串流电视或电影，让用户无需提前下载视频数据就能观看。这类系统的一个关键特性，是用户能够在视频播放中前进或后退，从而跳过或重复某些片段。在客户端程序中，我可以通过向服务器请求一块数据来实现这一点，这块数据对应着用户所选的新时间索引：
+
+\begin{codebox}[python]
+def timecode_to_index(video_id, timecode):
+    ...
+    # 返回视频数据中的字节偏移量
+def request_chunk(video_id, byte_offset, size):
+    ...
+    # 从偏移量处返回 video_id 中 size 字节的数据
+video_id = ...
+timecode = "01:09:14:28"
+byte_offset = timecode_to_index(video_id, timecode)
+size = 20 * 1024 * 1024
+video_data = request_chunk(video_id, byte_offset, size)
+\end{codebox}
+
+你会如何实现这个接收 \texttt{request\_chunk} 请求、并返回相应 20 MB 视频数据块的服务器端处理器？为了便于说明，我假设服务器的命令与控制部分已经搭建完成（关于需要哪些工作，参见 Item 76（"了解如何将线程式 I/O 移植到 \texttt{asyncio}"））。这里我只关注最后几步：从缓存于内存中的数 GB 视频数据里抽取出所请求的块，再通过套接字（socket）发送回客户端。具体实现大致如下：
+
+\begin{codebox}[python]
+socket = ...             # 与客户端的套接字连接
+video_data = ...         # 包含 video_id 数据的字节串
+byte_offset = ...        # 请求的起始位置
+size = 20 * 1024 * 1024  # 请求的块大小
+chunk = video_data[byte_offset : byte_offset + size]
+socket.send(chunk)
+\end{codebox}
+
+这段代码的延迟与吞吐量取决于两个因素：从 \texttt{video\_data} 中切分出 20 MB 视频块需要多长时间，以及套接字将数据传送到客户端需要多长时间。如果我假设套接字快得无限，就可以使用内置的 \texttt{timeit} 模块运行一个微基准测试，从而了解以这种方式切分 \texttt{bytes} 实例来创建数据块的性能特征（背景知识参见 Item 14（"了解如何切分序列"））：
+
+\begin{codebox}[python]
+import timeit
+def run_test():
+    chunk = video_data[byte_offset : byte_offset + size]
+    # 调用 socket.send(chunk)，但基准测试中忽略
+    result = (
+        timeit.timeit(
+            stmt="run_test()",
+            globals=globals(),
+            number=100,
+        )
+        / 100
+    )
+    print(f"{result:0.9f} seconds")
+>>>
+0.004925669 seconds
+\end{codebox}
+
+这里大约花了 5 毫秒来抽取待发送给客户端的 20 MB 数据切片。这意味着我这台服务器的整体吞吐量被限制在理论最大值 20 MB / 5 毫秒 = 4 GB/秒，因为那已经是我从内存中抽取视频数据能达到的最快速度。我的服务器还会被限制在 1 CPU 秒 / 5 毫秒 = 200 个并行请求新数据块的客户端，这与 \texttt{asyncio} 这类内置模块所能支持的数以万计的并发连接相比，简直微不足道。问题在于，切分 \texttt{bytes} 实例会导致底层数据被复制，而这要消耗 CPU 时间。
+
+编写这段代码更好的办法，是使用 Python 的内置 \texttt{memoryview}（内存视图）类型，它向程序暴露了 CPython 的高性能缓冲区协议（buffer protocol）。缓冲区协议是一个底层的 C API，它允许 Python 运行时与 C 扩展模块（参见 Item 96（"考虑使用扩展模块以最大化性能与易用性"））去访问诸如 \texttt{bytes} 实例这类对象背后的底层数据缓冲区。
+
+\texttt{memoryview} 实例最妙的地方在于，切分它们会得到一个同样不复制底层数据的 \texttt{memoryview} 实例。这里我创建一个包裹 \texttt{bytes} 实例的 \texttt{memoryview} 实例，并查看它的一个切片：
+
+\begin{codebox}[python]
+data = b"shave and a haircut, two bits"
+view = memoryview(data)
+chunk = view[12:19]
+print(chunk)
+print("Size:           ", chunk.nbytes)
+print("Data in view:   ", chunk.tobytes())
+print("Underlying data:", chunk.obj)
+>>>
+<memory at 0x105407940>
+Size:            7
+Data in view:    b'haircut'
+Underlying data: b'shave and a haircut, two bits'
+\end{codebox}
+
+通过支持零拷贝操作，\texttt{memoryview} 能为那些需要快速处理大量内存的代码带来巨大的提速，例如像 NumPy 这样的数值类 C 扩展模块，以及像本例这样的 I/O 密集型程序。这里我用 \texttt{memoryview} 切分替代前面那种简单的 \texttt{bytes} 切分，并重复同样的微基准测试：
+
+\begin{codebox}[python]
+video_view = memoryview(video_data)
+def run_test():
+    chunk = video_view[byte_offset : byte_offset + size]
+    # 调用 socket.send(chunk)，但基准测试中忽略
+    result = (
+        timeit.timeit(
+            stmt="run_test()",
+            globals=globals(),
+            number=100,
+        )
+        / 100
+    )
+    print(f"{result:0.9f} seconds")
+>>>
+0.000000250 seconds
+\end{codebox}
+
+结果是 250 纳秒。现在我的服务器理论最大吞吐量达到了 20 MB / 250 纳秒 = 80 TB/秒。对于并行客户端，我在理论上最多可支持 1 CPU 秒 / 250 纳秒 = 400 万。这才像话！这意味着此刻我的程序完全受限于与客户端之间套接字连接的底层性能，而不再受限于 CPU。
+
+现在设想数据必须朝相反方向流动：某些客户端向服务器发送实时视频流，以便广播给其他用户。为了处理这种情况，我需要把该用户最新的视频数据存储到一个缓存中，供其他客户端读取。下面是从入站客户端读取 1 MB 新数据的实现大致的样子：
+
+\begin{codebox}[python]
+socket = ...        # 与客户端的套接字连接
+video_cache = ...   # 入站视频流的缓存
+byte_offset = ...   # 入站缓冲区位置
+size = 1024 * 1024  # 入站块大小
+chunk = socket.recv(size)
+video_view = memoryview(video_cache)
+before = video_view[:byte_offset]
+after = video_view[byte_offset + size :]
+new_cache = b"".join([before, chunk, after])
+\end{codebox}
+
+\texttt{socket.recv} 方法会返回一个 \texttt{bytes} 实例。我可以利用简单的切分操作以及 \texttt{bytes.join} 方法，把新数据与现有缓存在当前 \texttt{byte\_offset} 处拼接起来。为了了解其性能，我可以再运行一个微基准测试。这里我使用一个虚拟的套接字实现，因此该性能测试只针对内存操作，而不涉及 I/O 交互：
+
+\begin{codebox}[python]
+def run_test():
+    chunk = socket.recv(size)
+    before = video_view[:byte_offset]
+    after = video_view[byte_offset + size :]
+    new_cache = b"".join([before, chunk, after])
+    result = (
+        timeit.timeit(
+            stmt="run_test()",
+            globals=globals(),
+            number=100,
+        )
+        / 100
+    )
+    print(f"{result:0.9f} seconds")
+>>>
+0.033520550 seconds
+\end{codebox}
+
+接收 1 MB 并更新视频缓存需要 33 毫秒。这意味着我的最大接收吞吐量是 1 MB / 33 毫秒 = 31 MB/秒，并且我最多只能支持 31 MB / 1 MB = 31 个以这种方式流式传入视频数据的并发客户端。这无法扩展。
+
+编写这段代码更好的办法，是使用 Python 的内置 \texttt{bytearray}（字节数组）类型，并配合 \texttt{memoryview} 一起使用。\texttt{bytes} 实例的一个局限是它们是只读的，不允许更新单个索引：
+
+\begin{codebox}[python]
+my_bytes = b"hello"
+my_bytes[0] = 0x79
+>>>
+Traceback ...
+TypeError: 'bytes' object does not support item assignment
+\end{codebox}
+
+\texttt{bytearray} 类型就像是 \texttt{bytes} 的一个可变版本，允许覆盖任意位置。\texttt{bytearray} 使用整数作为其取值，而非 \texttt{bytes}：
+
+\begin{codebox}[python]
+my_array = bytearray(b"hello")
+my_array[0] = 0x79
+print(my_array)
+>>>
+bytearray(b'yello')
+\end{codebox}
+
+\texttt{memoryview} 对象同样可以用来包裹一个 \texttt{bytearray} 实例。当你切分一个 \texttt{memoryview} 时，得到的对象可用于向底层缓冲区的特定部分写入数据。这就消除了前面那种在从客户端接收到数据之后、必须将 \texttt{bytes} 实例拼接回去所产生的复制开销：
+
+\begin{codebox}[python]
+my_array = bytearray(b"row, row, row your boat")
+my_view = memoryview(my_array)
+write_view = my_view[3:13]
+write_view[:] = b"-10 bytes-"
+print(my_array)
+>>>
+bytearray(b'row-10 bytes- your boat')
+\end{codebox}
+
+Python 中的许多库方法，例如 \texttt{socket.recv\_into} 和 \texttt{RawIOBase.readinto}，都借助缓冲区协议来快速接收或读取数据。这些方法的好处在于避免了分配内存以及再创建一份数据副本；接收到的内容直接进入既有的缓冲区。这里我使用 \texttt{socket.recv\_into} 配合一个 \texttt{memoryview} 切片，将数据接收进底层的 \texttt{bytearray} 中，而无需任何拼接：
+
+\begin{codebox}[python]
+video_array = bytearray(video_cache)
+write_view = memoryview(video_array)
+chunk = write_view[byte_offset : byte_offset + size]
+socket.recv_into(chunk)
+\end{codebox}
+
+我可以再运行一个微基准测试，将这种方案的性能与前面那个使用 \texttt{socket.recv} 的例子做对比：
+
+\begin{codebox}[python]
+def run_test():
+    chunk = write_view[byte_offset : byte_offset + size]
+    socket.recv_into(chunk)
+    result = (
+        timeit.timeit(
+            stmt="run_test()",
+            globals=globals(),
+            number=100,
+        )
+        / 100
+    )
+    print(f"{result:0.9f} seconds")
+>>>
+0.000033925 seconds
+\end{codebox}
+
+接收一段 1 MB 的视频传输只花了 33 微秒。这意味着我的服务器能够支持最大吞吐量 1 MB / 33 微秒 = 31 GB/秒，以及 31 GB / 1 MB = 31,000 个并行流式客户端。这正是我所期望的那种可扩展性！
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{memoryview} 内置类型提供了一个零拷贝接口，用于对支持 Python 高性能缓冲区协议的对象进行切片的读写。
+\item \texttt{bytearray} 内置类型提供了一种可变的、类似 \texttt{bytes} 的类型，可与 \texttt{socket.recv\_from} 等函数配合，用于零拷贝的数据读取。
+\item \texttt{memoryview} 可以包裹 \texttt{bytearray}，从而让接收到的数据被拼接进任意缓冲区位置，而无需付出复制代价。
+\end{itemize}

@@ -1,0 +1,1683 @@
+Python 拥有一些语言特性，能帮助你构建具有清晰接口边界、定义良好的 API。Python 社区已确立了一些最佳实践，以在长期中最大化代码的可维护性（maintainability）。此外，随 Python 一同发布的一些标准工具，能让大型团队跨越各异的环境协同工作。
+
+与他人协作开发 Python 程序，需要你在如何编写代码上做到审慎。即便你独自工作，你也很可能会通过标准库或开源包来使用别人编写的代码。理解那些让与其他 Python 程序员协作变得轻松的机制，至关重要。
+
+\section{Item 116: 知道去哪里寻找社区构建的模块}
+
+Python 拥有一个集中存放模块的仓库（https://pypi.org），你可以在自己的程序里安装并使用其中的模块。这些模块由像你一样的开发者构建并维护，也就是 Python 社区（Python community）。当你遇到不熟悉的难题时，Python 包索引（Python Package Index，PyPI）是一个寻找代码的好去处，能帮你更接近目标。
+
+要使用这个包索引，你需要用到名为 \texttt{pip}（「pip installs packages」 的递归缩写）的命令行工具。你可以运行 \texttt{python3 -m pip}，以确保包被安装到系统上正确版本的 Python 中（见 Item 1（「了解你正在使用的 Python 版本」））。用 \texttt{pip} 安装一个新模块很简单。例如，下面我安装了 \texttt{numpy} 模块（相关说明见 Item 94（「了解何时以及如何用其他编程语言替代 Python」））：
+
+\begin{codebox}[python]
+$ python3 -m pip install numpy
+Collecting numpy
+  Downloading ...
+Installing collected packages: numpy
+Successfully installed numpy-2.0.0
+\end{codebox}
+
+\texttt{pip} 最好与内置模块 \texttt{venv} 配合使用，以便始终如一地记录项目中需要安装的一组包（见 Item 117（「用虚拟环境实现隔离且可复现的依赖」））。你也可以创建自己的 PyPI 包，与 Python 社区分享，或者搭建自己的私有包仓库，供 \texttt{pip} 使用。
+
+PyPI 中的每个模块都有自己的软件许可证（software license）。对于大多数包，尤其是那些流行的包，其许可证是免费或开源的（详见 https://opensource.org）。这类许可证通常允许你将模块的一份副本随程序一起分发（包括面向最终用户分发；相关条目见 Item 125（「相较于 \texttt{zipimport} 与 \texttt{zipapp}，打包 Python 程序时优先选择开源项目」））；如有疑问，请咨询律师。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 包索引（Python Package Index，PyPI）包含了大量由 Python 社区构建并维护的常用包。
+\item \texttt{pip} 是你可以用来从 PyPI 安装包的命令行工具。
+\item 绝大多数 PyPI 模块都是免费的开源软件。
+\end{itemize}
+
+\section{Item 117: 使用虚拟环境实现隔离且可复现的依赖}
+
+随着程序变得更大、更复杂，你往往会依赖 Python 社区提供的各种包（参见 Item 116（「了解去哪里寻找社区构建的模块」））。你会发现自己经常运行 \texttt{python3 -m pip} 命令行工具来安装 \texttt{numpy}、\texttt{pandas} 等许多包。
+
+问题在于，默认情况下，\texttt{pip} 会把新包安装到一个全局位置。这会导致系统上所有的 Python 程序都受到这些已安装模块的影响。理论上，这不该成为问题。如果你安装了一个包却从不导入它，它又怎么会影响到你的程序呢？
+
+麻烦来自传递性依赖（transitive dependency）：也就是你安装的包所依赖的那些包。例如，安装 \texttt{Sphinx} 包之后，你可以向 \texttt{pip} 询问来查看它的依赖：
+
+\begin{codebox}[python]
+$ python3 -m pip show Sphinx
+Name: Sphinx
+Version: 7.4.6
+Summary: Python documentation generator
+Location: /usr/local/lib/python3.13/site-packages
+Requires: alabaster, babel, docutils, imagesize, Jinja2,
+' packaging, Pygments, requests, snowballstemmer,
+' sphinxcontrib-applehelp, sphinxcontrib-devhelp,
+' sphinxcontrib-htmlhelp, sphinxcontrib-jsmath,
+' sphinxcontrib-qthelp, sphinxcontrib-serializinghtml
+\end{codebox}
+
+如果你再安装像 \texttt{flask} 这样的包，也会发现它同样依赖 \texttt{Jinja2} 包：
+
+\begin{codebox}[python]
+$ python3 -m pip show flask
+Name: Flask
+Version: 3.0.3
+Summary: A simple framework for building complex web applications.
+Location: /usr/local/lib/python3.13/site-packages
+Requires: blinker, click, itsdangerous, Jinja2, Werkzeug
+\end{codebox}
+
+随着时间推移，\texttt{Sphinx} 和 \texttt{flask} 的发展可能出现分歧，进而引发依赖冲突（dependency conflict）。或许眼下它们都要求相同版本的 \texttt{Jinja2}，一切正常。但半年或一年后，\texttt{Jinja2} 可能发布一个新版本，对库的用法做出破坏性改动。如果你用 \texttt{python3 -m pip install --upgrade Jinja2} 把全局的 \texttt{Jinja2} 升级到新版本，可能会发现 \texttt{Sphinx} 出了问题，而 \texttt{flask} 却依旧正常。
+
+造成这种破坏的原因是，Python 同一时刻只能安装某个模块的一个全局版本。如果你的某个已安装包必须使用新版本，而另一个包又必须使用旧版本，系统就无法正常工作；这种情形常被称为「依赖地狱（dependency hell）」。
+
+即使包维护者尽了最大努力在发布版本之间保持 API 兼容性（参见 Item 119（「用包来组织模块并提供稳定的 API」）），这种破坏也可能发生。库的新版本可能会悄悄改变 API 消费代码所依赖的行为。系统上的用户可能把某个包升级到了新版本，却没有升级其他包，这也可能破坏依赖关系。如果不加留意，脚下的大地随时可能移动——风险始终存在。
+
+当你与其他在各自电脑上工作的开发者协作时，这些困难会被放大。最好做最坏的假设：他们在自己机器上安装的 Python 及全局包的版本，与你的会略有差异。这些差异会导致令人头疼的情形，比如同一份代码库在一位程序员机器上运行完美，在另一位机器上却完全跑不起来。
+
+解决所有这些问题的办法，是使用名为 \texttt{venv} 的工具，它提供虚拟环境（virtual environment）。自 Python 3.4 起，\texttt{pip} 和 \texttt{venv} 模块就随 Python 安装默认提供（可通过 \texttt{python -m venv} 调用）。
+
+\texttt{venv} 让你可以创建相互隔离的 Python 环境副本。借助 \texttt{venv}，你可以在同一系统上同时安装同一个包的不同版本而不产生冲突。这意味着你可以在同一台电脑上处理许多不同的项目，使用许多不同的工具。
+
+\texttt{venv} 的实现方式是：把包及其依赖的特定版本，安装到完全独立的目录结构中。这样一来，你就能复现出一个确定能与你的代码协同工作的 Python 环境。这是一种避免意外破坏的可靠手段。
+
+\subsection{在命令行中使用 venv}
+
+下面快速演示如何有效使用 \texttt{venv}。在使用该工具之前，有一点很重要：要弄清你系统上 \texttt{python3} 命令行工具的含义。在我的电脑上，\texttt{python3} 位于 \texttt{/usr/local/bin} 目录，对应版本为 3.13（参见 Item 1（「弄清楚你正在使用哪个版本的 Python」））：
+
+\begin{codebox}[python]
+$ which python3
+/usr/local/bin/python3
+$ python3 --version
+Python 3.13.0
+\end{codebox}
+
+为了演示我的环境配置，我可以测试一下：运行导入 \texttt{numpy} 模块的命令不会报错。这能成功，是因为我早已把 \texttt{numpy} 包作为全局模块安装了：
+
+\begin{codebox}[python]
+$ python3 -c 'import numpy'
+$
+\end{codebox}
+
+现在我用 \texttt{venv} 创建一个名为 \texttt{myproject} 的新虚拟环境。每个虚拟环境都必须驻留在自己独有的目录中。这条命令的结果是一棵目录与文件树，用于管理该虚拟环境：
+
+\begin{codebox}[python]
+$ python3 -m venv myproject
+$ cd myproject
+$ ls
+bin     include     lib     pyvenv.cfg
+\end{codebox}
+
+要开始使用虚拟环境，我在自己的 shell 中通过 \texttt{source} 命令执行 \texttt{bin/activate} 脚本。\texttt{activate} 会修改我所有的环境变量，使其与虚拟环境匹配。它还会更新我的命令行提示符，把虚拟环境名（\texttt{myproject}）加进去，让我清楚地知道当前正在操作什么：
+
+\begin{codebox}[python]
+$ source bin/activate
+(myproject)$
+\end{codebox}
+
+在 Windows 上，同样的脚本以如下形式提供：
+
+\begin{codebox}[python]
+C:\> myproject\Scripts\activate.bat
+(myproject) C:>
+\end{codebox}
+
+而使用 PowerShell 时，它则是：
+
+\begin{codebox}[python]
+PS C:\> myproject\Scripts\activate.ps1
+(myproject) PS C:>
+\end{codebox}
+
+激活之后，你会看到 \texttt{python3} 命令行工具的路径已经移动到虚拟环境目录内部：
+
+\begin{codebox}[python]
+(myproject)$ which python3
+/tmp/myproject/bin/python3
+(myproject)$ ls -l /tmp/myproject/bin/python3
+... -> /usr/local/bin/python3
+\end{codebox}
+
+这保证了外部系统的改动不会影响虚拟环境。即使外层系统把默认的 \texttt{python3} 升级到了 3.14 版本，我的虚拟环境仍然会明确地指向 3.13 版本。
+
+我用 \texttt{venv} 创建的虚拟环境，起初除了 \texttt{pip} 和 \texttt{setuptools} 之外没有安装任何其他包。试图使用外层系统中作为全局模块安装的 \texttt{numpy} 包会失败，因为虚拟环境并不认识它：
+
+\begin{codebox}[python]
+(myproject)$ python3 -c 'import numpy'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import numpy
+ModuleNotFoundError: No module named 'numpy'
+\end{codebox}
+
+我可以用 \texttt{pip} 命令行工具把 \texttt{numpy} 模块安装进我的虚拟环境：
+
+\begin{codebox}[python]
+(myproject)$ python3 -m pip install numpy
+Collecting numpy
+  Downloading ...
+Installing collected packages: numpy
+Successfully installed numpy-2.0.0
+\end{codebox}
+
+安装完成后，我可以用同样的测试导入命令来验证它是否正常工作：
+
+\begin{codebox}[python]
+(myproject)$ python3 -c 'import numpy'
+(myproject)$
+\end{codebox}
+
+当我用完某个虚拟环境、想回到默认系统时，我会用 \texttt{deactivate} 命令。这会把我的环境恢复为系统默认值，包括 \texttt{python3} 命令行工具的位置：
+
+\begin{codebox}[python]
+(myproject)$ which python3
+/tmp/myproject/bin/python3
+(myproject)$ deactivate
+$ which python3
+/usr/local/bin/python3
+\end{codebox}
+
+如果将来我想再次进入 \texttt{myproject} 环境，只需像之前一样，在该目录中运行 \texttt{source bin/activate}（或在 Windows 上运行类似的命令）即可。
+
+\subsection{复现依赖}
+
+一旦进入虚拟环境，你就可以按需要用 \texttt{pip} 继续往里面安装包。最终，你可能想把环境复制到别处。例如，假设我想在数据中心的一台服务器上复现我工作站上的开发环境。又或者，我想在自己的机器上克隆别人的环境，以便帮忙调试他们的代码。\texttt{venv} 让这类任务变得轻而易举。
+
+我可以用 \texttt{python3 -m pip freeze} 命令，把我所有的显式包依赖保存到文件中（按照惯例，该文件名为 \texttt{requirements.txt}）：
+
+\begin{codebox}[python]
+(myproject)$ python3 -m pip freeze > requirements.txt
+(myproject)$ cat requirements.txt
+certifi==2024.7.4
+charset-normalizer==3.3.2
+idna==3.7
+numpy==2.0.0
+requests==2.32.3
+urllib3==2.2.2
+\end{codebox}
+
+现在假设我想拥有另一个与 \texttt{myproject} 环境一致的虚拟环境。我可以像之前一样，用 \texttt{venv} 创建一个新目录并激活它：
+
+\begin{codebox}[python]
+$ python3 -m venv otherproject
+$ cd otherproject
+$ source bin/activate
+(otherproject)$
+\end{codebox}
+
+新环境不会安装任何额外的包：
+
+\begin{codebox}[python]
+(otherproject)$ python3 -m pip list
+Package Version
+------- -------
+pip     24.1.1
+\end{codebox}
+
+通过在由 \texttt{python3 -m pip freeze} 命令生成的 \texttt{requirements.txt} 文件上运行 \texttt{python3 -m pip install}，我就能安装第一个环境里的全部包：
+
+\begin{codebox}[python]
+(otherproject)$ python3 -m pip install -r
+'/tmp/myproject/ requirements.txt
+\end{codebox}
+
+这条命令会运转一会儿，检索并安装复现第一个环境所需的全部包。
+
+完成后，我可以列出第二个虚拟环境中已安装的包集合，应当能看到与第一个虚拟环境相同的依赖列表：
+
+\begin{codebox}[python]
+(otherproject)$ python3 -m pip list
+Package            Version
+------------------ --------
+certifi            2024.7.4
+charset-normalizer 3.3.2
+idna               3.7
+pip                24.1.1
+urllib3            2.2.2
+\end{codebox}
+
+使用 \texttt{requirements.txt} 文件，非常适合通过版本控制系统与他人协作。你可以在更新包依赖列表的同时提交代码的改动，确保二者同步推进。不过要注意一点：你使用的具体 Python 版本并不包含在 \texttt{requirements.txt} 文件中，因此必须单独管理。
+
+虚拟环境的一个陷阱（gotcha）在于：移动它们会让一切崩溃，因为所有路径（包括 \texttt{python3} 命令行工具）都硬编码到了该环境的安装目录中。但说到底这个限制并无大碍。虚拟环境的全部意义，本就是让「复现一套配置」变得容易。与其移动虚拟环境目录，不如在旧环境上运行 \texttt{python3 -m pip freeze}，在别处新建一个虚拟环境，然后从 \texttt{requirements.txt} 文件重新安装全部内容。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 虚拟环境允许你用 \texttt{pip} 在同一台机器上安装同一个包的不同版本而不产生冲突。
+\item 虚拟环境通过 \texttt{python -m venv} 创建，用 \texttt{source bin/activate} 启用，用 \texttt{deactivate} 停用。
+\item 你可以用 \texttt{python3 -m pip freeze} 导出某个环境的全部依赖。用 \texttt{python3 -m pip install -r requirements.txt} 即可复现一个环境。
+\end{itemize}
+
+\section{Item 118: 为每个函数、类和模块编写文档字符串}
+
+在 Python 中，文档（documentation）极其重要，因为该语言具有动态（dynamic）特性。Python 提供了内置（built-in）支持，可以为代码块附加文档。与许多其他语言不同，程序源代码中的文档在程序运行时便可直接访问。
+
+例如，你可以在函数（function）的 \texttt{def} 语句之后紧跟着提供文档字符串（docstring）来添加文档：
+
+\begin{codebox}[python]
+def palindrome(word):
+    """Return True if the given word is a palindrome."""
+    return word == word[::-1]
+assert palindrome("tacocat")
+assert not palindrome("banana")
+\end{codebox}
+
+你可以通过访问函数的 \texttt{\_\_doc\_\_} 特殊属性，从 Python 程序自身内部获取文档字符串：
+
+\begin{codebox}[python]
+print(palindrome.__doc__)
+>>>
+Return True if the given word is a palindrome.
+\end{codebox}
+
+你也可以从命令行使用内置的 \texttt{pydoc} 模块，在你的计算机上启动一个本地 Web 服务器，托管解释器（interpreter）可访问的全部 Python 文档，包括你自己编写的模块：
+
+\begin{codebox}[python]
+$ python3 -m pydoc -p 1234
+Server ready at http://localhost:1234/
+Server commands: [b]rowser, [q]uit
+server> b
+\end{codebox}
+
+文档字符串可以附加到函数、类（class）和模块（module）上。建立这样的关联是编译和运行 Python 程序过程的一部分。对文档字符串和 \texttt{\_\_doc\_\_} 属性的支持带来了三点结果：
+
+\begin{itemize}
+\item 文档的可访问性让交互式开发更加容易。你可以使用内置函数 \texttt{help} 来检查函数、类和模块，查看它们的文档。这让 Python 交互式解释器以及 Jupyter（https://jupyter.org）之类的工具在你开发算法、测试 API 和编写代码片段时非常好用。
+\item 采用标准化的文档定义方式，便于构建将文本转换为更美观格式（如 HTML）的工具。这催生了 Python 社区中优秀的文档生成工具，例如 Sphinx（https://www.sphinx-doc.org）。它还促成了 Read the Docs（https://readthedocs.org）这样的服务，为开源 Python 项目免费托管美观的文档。
+\item Python 中一等（first-class）、可访问且美观的文档鼓励人们编写更多文档。Python 社区的成员强烈认同文档的重要性。人们普遍认为「良好的代码」也意味着有良好文档的代码，因此你可以预期大多数开源 Python 库都具备像样的文档。
+\end{itemize}
+
+要融入这种优秀的文档文化，你在编写文档字符串时需要遵循一些准则。完整的细节在线文档 PEP 257（https://www.python.org/dev/peps/pep-0257/）中有讨论。以下是你务必遵循的一些最佳实践。
+
+\subsection{文档化模块}
+
+每个模块都应有一个顶层文档字符串——即源文件中作为第一条语句的字符串字面值（string literal）。它应使用三个双引号（\texttt{"""}）。该文档字符串的目标是介绍模块及其内容。
+
+文档字符串的第一行应当是一句话，描述模块的目的。其后的段落应包含模块所有使用者都应了解的关于其运行方式的细节。
+
+模块文档字符串也是一个起点，你可以在此强调模块中重要的类和函数。
+
+下面是一个模块文档字符串的示例：
+
+\begin{codebox}[python]
+# words.py
+#!/usr/bin/env python3
+"""Library for finding linguistic patterns in words.
+Testing how words relate to each other can be tricky sometimes!
+This module provides easy ways to determine when words you've
+found have special properties.
+Available functions:
+- palindrome: Determine if a word is a palindrome.
+- check_anagram: Determine if two words are anagrams.
+...
+"""
+...
+\end{codebox}
+
+如果该模块是一个命令行（command-line）工具，那么模块文档字符串也是放置该工具运行用法信息的绝佳位置。
+
+\subsection{文档化类}
+
+每个类都应有一个类级文档字符串，大体遵循与模块级文档字符串相同的模式。第一行是描述类目的的一句话。其后的段落讨论类运行方式的重要细节。
+
+类的公有（public）属性和方法应在类级文档字符串中予以强调。它还应向子类（subclass）提供关于如何恰当地与受保护（protected）属性（见 Item 55「优先选用公有属性而非私有属性」）以及超类（superclass）的方法（见 Item 53「用 super 初始化父类」）交互的指导。
+
+下面是一个类文档字符串的示例：
+
+\begin{codebox}[python]
+class Player:
+    """Represents a player of the game.
+    Subclasses may override the 'tick' method to provide
+    custom animations for the player's movement depending
+    on their power level, etc.
+    Public attributes:
+    - power: Unused power-ups (float between 0 and 1).
+    - coins: Coins found during the level (integer).
+    """
+    ...
+\end{codebox}
+
+\subsection{文档化函数}
+
+每个公有函数和方（method）都应有一个文档字符串，遵循与模块和类文档字符串相同的模式。第一行是描述该函数功能的单句说明。其后的段落描述任何特定行为以及函数的参数（argument）。应提及所有返回值，并解释调用者必须作为函数接口一部分处理的任何异常（exception）（示例见 Item 32「优先引发异常而非返回 None」）。
+
+下面是一个函数文档字符串的示例：
+
+\begin{codebox}[python]
+def find_anagrams(word, dictionary):
+    """Find all anagrams for a word.
+    This function only runs as fast as the test for
+    membership in the 'dictionary' container.
+    Args:
+        word: String of the target word.
+        dictionary: collections.abc.Container with all
+            strings that are known to be actual words.
+    Returns:
+        List of anagrams that were found. Empty if
+        none were found.
+    """
+    ...
+\end{codebox}
+
+在为函数编写文档字符串时，还有一些需要了解的重要特殊情况：
+
+\begin{itemize}
+\item 如果一个函数没有参数（argument）且返回值简单，那么单句描述大概就足够了。
+\item 如果函数不返回任何东西，那么省略对返回值的提及，比说「返回 None」要好。
+\item 如果函数接口包括引发（raise）异常，那么你的文档字符串应当描述每个被引发的异常以及引发时机。
+\item 如果你不期望函数在正常操作中引发异常，则无需提及这一点。
+\item 如果函数接受可变数量的参数（argument）（见 Item 34「用可变位置参数减少视觉噪声」）或关键字参数（keyword argument）（见 Item 35「用关键字参数提供可选行为」），请在文档化的参数列表中使用 \texttt{*args} 和 \texttt{**kwargs} 来描述其用途。
+\item 如果函数有带默认值的参数，应当提及这些默认值（见 Item 36「用 None 和文档字符串指定动态默认参数」）。
+\item 如果函数是一个生成器（generator）（见 Item 43「考虑用生成器代替返回列表」），其文档字符串应描述该生成器在被迭代时产出（yield）什么。
+\item 如果函数是一个异步协程（coroutine）（见 Item 75「用协程实现高并发 I/O」），其文档字符串应说明它何时会停止执行。
+\end{itemize}
+
+\subsection{使用文档字符串与类型标注}
+
+Python 现在支持用于多种用途的类型标注（type annotation）（关于如何使用，见 Item 124「考虑通过 typing 进行静态分析以消除缺陷」）。它们包含的信息可能与常见的文档字符串存在冗余。例如，下面是为 \texttt{find\_anagrams} 应用了类型标注的函数签名：
+
+\begin{codebox}[python]
+from collections.abc import Container
+def find_anagrams( word: str,
+dictionary: Container[str]) -> list[str]:
+    ...
+\end{codebox}
+
+不再需要在文档字符串中说明 \texttt{word} 参数是一个字符串，因为类型标注已经包含了该信息。\texttt{dictionary} 参数是 \texttt{collections.abc.Container} 也是同样道理。没有理由提及返回类型将是一个列表，因为这一事实已经明确标注。
+
+而且当没有找到变位词（anagram）时，返回值仍然必须是一个列表，因此隐含它将是空的；这无需在文档字符串中注明。这里我写出上面相同的函数签名，以及相应缩短后的文档字符串：
+
+\begin{codebox}[python]
+def find_anagrams( word: str,
+dictionary: Container[str]) -> list[str]:
+    """Find all anagrams for a word.
+    This function only runs as fast as the test for
+    membership in the 'dictionary' container.
+    Args:
+        word: Target word.
+        dictionary: All known actual words.
+    Returns:
+        Anagrams that were found.
+    """
+    ...
+\end{codebox}
+
+对于实例字段（field）、类属性和方法，也应类似地避免类型标注与文档字符串之间的冗余。
+
+最好将类型信息只放在一处，这样它偏离实际实现的风险就更小。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 为每个模块、类、方法和函数使用文档字符串编写文档。随着代码变更，保持它们为最新状态。
+\item 对于模块，介绍模块的内容以及所有使用者都应了解的任意重要类或函数。
+\item 对于类，在紧随类语句的文档字符串中记录行为、重要属性和子类（subclass）行为。
+\item 对于函数或方法，在紧随 \texttt{def} 语句的文档字符串中记录每个参数、返回值、被引发的异常以及其他行为。
+\item 如果你在使用类型标注，请从文档字符串中省略该信息，因为将其放在两处会是冗余的。
+\end{itemize}
+
+\section{Item 119: 使用包来组织模块并提供稳定的 API}
+
+随着程序代码库规模的增长，重新组织其结构是很自然的事。你会把较大的函数拆分成较小的函数。你会把数据结构重构（refactor）为辅助类（helper class）（示例见 Item 29「用组合类代替深层嵌套的字典、列表和元组」）。你会把功能分离到相互依赖的多个模块中。
+
+在某些时候，你会发现模块太多了，以至于需要在程序中添加另一个层次才能让人理解。为此，Python 提供了包（package）。包是包含其他模块的模块。
+
+在大多数情况下，包是通过将一个名为 \texttt{\_\_init\_\_.py} 的空文件放入目录来定义的。一旦存在 \texttt{\_\_init\_\_.py}，该目录中的任何其他 Python 文件都可以通过相对于该目录的路径进行导入（import）。例如，假设我在某个程序中有如下目录结构：
+
+\begin{codebox}[python]
+main.py
+mypackage/__init__.py
+mypackage/models.py
+mypackage/utils.py
+\end{codebox}
+
+要导入 \texttt{utils} 模块，我可以使用包含包目录名称的绝对（absolute）模块名：
+
+\begin{codebox}[python]
+# main.py
+import mypackage.utils
+\end{codebox}
+
+我也可以使用 \texttt{from} 子句，相对于其所属包导入子模块名：
+
+\begin{codebox}[python]
+# main2.py
+from mypackage import utils
+\end{codebox}
+
+当我有嵌套在其他包中的包目录时，\texttt{import} 语句的这种点状路径模式会延续下去（例如 \texttt{import mypackage.foo.bar} 和 \texttt{from mypackage.foo import bar}）。
+
+在 Python 程序中，包所提供的功能有两个主要用途。
+
+\subsection{命名空间}
+
+包的第一个用途是帮助将你的模块划分到相互独立的命名空间（namespace）中。它们让你能够拥有许多文件名相同但绝对路径不同的模块，而这些路径是唯一的。例如，下面是一个从两个同名文件 \texttt{utils.py} 的模块中导入属性的程序：
+
+\begin{codebox}[python]
+# main.py
+from analysis.utils import log_base2_bucket
+from frontend.utils import stringify
+bucket = stringify(log_base2_bucket(33))
+\end{codebox}
+
+当包中定义的函数、类或子模块具有相同名称时，这种方法就会失效。例如，假设我想同时用 \texttt{analysis.utils} 和 \texttt{frontend.utils} 两个模块中的 \texttt{inspect} 函数。直接导入属性是行不通的，因为第二条 \texttt{import} 语句会覆盖当前作用域（scope）中 \texttt{inspect} 的值。
+
+\begin{codebox}[python]
+# main2.py
+from analysis.utils import inspect
+from frontend.utils import inspect  # Overwrites!
+\end{codebox}
+
+解决办法是使用 \texttt{import} 语句的 \texttt{as} 子句，为当前作用域中导入的内容重命名：
+
+\begin{codebox}[python]
+# main3.py
+from analysis.utils import inspect as analysis_inspect
+from frontend.utils import inspect as frontend_inspect
+value = 33
+if analysis_inspect(value) == frontend_inspect(value):
+    print("Inspection equal!")
+\end{codebox}
+
+\texttt{as} 子句可用于重命名通过 \texttt{import} 语句获取的任何内容，包括整个模块。这便于访问带命名空间的代码，并在使用时使其身份清晰明了。
+
+另一种避免导入名称冲突的方法是始终通过最高级别的唯一模块名来访问名称。对于上面的例子，这意味着我会使用基本的 \texttt{import} 语句，而不是 \texttt{from} 子句：
+
+\begin{codebox}[python]
+# main4.py
+import analysis.utils
+import frontend.utils
+value = 33
+if (analysis.utils.inspect(value) ==
+        frontend.utils.inspect(value)):
+    print("Inspection equal!")
+\end{codebox}
+
+这种方法让你完全避免使用 \texttt{as} 子句。它还让代码的新读者非常清楚地知道每个同名函数定义在哪里。
+
+\subsection{稳定的 API}
+
+包在 Python 中的第二个用途，是为外部使用者提供严格、稳定的 API。
+
+当你在为更广泛的用途编写 API（例如一个开源包，示例见 Item 116「知道去哪里寻找社区构建的模块」）时，你会希望提供在版本之间不改变的稳定的功能。为确保这一点，向外部用户隐藏你的内部代码组织是很重要的。这样，你可以重构和改进包的内部模块，而不会破坏现有用户。
+
+Python 可以通过使用模块或包的 \texttt{\_\_all\_\_} 特殊属性，来限制暴露给 API 使用者（consumer）的接口面（surface area）。\texttt{\_\_all\_\_} 的值是一个 \texttt{list}，列出作为公共 API 一部分要从模块导出的每个名称。当消费代码执行 \texttt{from foo import *}（下文详述）时，只会从 \texttt{foo} 导入 \texttt{foo.\_\_all\_\_} 中的属性。如果 \texttt{foo} 中没有 \texttt{\_\_all\_\_}，则只会导入公共属性——即那些不以单下划线开头的属性（关于该约定的细节见 Item 55「优先使用公有属性而非私有属性」）。
+
+例如，假设我想提供一个用于计算运动抛射体（projectile）之间碰撞的包。这里我定义 \texttt{mypackage} 的 \texttt{models} 模块来包含抛射体的表示：
+
+\begin{codebox}[python]
+# models.py
+__all__ = ["Projectile"]
+class Projectile:
+    def __init__(self, mass, velocity):
+        self.mass = mass
+        self.velocity = velocity
+\end{codebox}
+
+我还在 \texttt{mypackage} 中定义一个 \texttt{utils} 模块，用于对 \texttt{Projectile} 实例执行操作，例如模拟它们之间的碰撞：
+
+\begin{codebox}[python]
+# utils.py
+from .models import Projectile
+__all__ = ["simulate_collision"]
+def _dot_product(a, b):
+    ...
+def simulate_collision(a, b):
+    ...
+\end{codebox}
+
+现在我想把该 API 的所有公共部分作为一组属性提供给 \texttt{mypackage} 模块。这将让下游（downstream）使用者始终直接从 \texttt{mypackage} 导入，而不是从 \texttt{mypackage.models} 或 \texttt{mypackage.utils} 导入。这确保了即使 \texttt{mypackage} 的内部组织发生变化（例如 \texttt{models.py} 被删除），API 使用者的代码也能继续工作。
+
+要用 Python 包实现这一点，你需要修改 \texttt{mypackage} 目录中的 \texttt{\_\_init\_\_.py} 文件。该文件在 \texttt{mypackage} 被导入时实际上就成为 \texttt{mypackage} 模块的内容。因此，你可以通过限制导入到 \texttt{\_\_init\_\_.py} 中的内容，为 \texttt{mypackage} 指定一个显式（explicit）API。由于我的所有内部模块都已经指定了 \texttt{\_\_all\_\_}，我可以通过简单地从内部模块导入所有内容并相应地更新 \texttt{\_\_all\_\_}，来暴露 \texttt{mypackage} 的公共接口：
+
+\begin{codebox}[python]
+# __init__.py
+__all__ = []
+from .models import *
+__all__ += models.__all__
+from .utils import *
+__all__ += utils.__all__
+\end{codebox}
+
+下面是一个直接使用 \texttt{mypackage} 导入、而非访问内部模块的 API 使用者：
+
+\begin{codebox}[python]
+# api_consumer.py
+from mypackage import *
+a = Projectile(1.5, 3)
+b = Projectile(4, 1.7)
+after_a, after_b = simulate_collision(a, b)
+\end{codebox}
+
+值得注意的是，像 \texttt{mypackage.utils.\_dot\_product} 这样仅供内部使用的函数，对 \texttt{mypackage} 上的 API 使用者是不可用的，因为它们不在 \texttt{\_\_all\_\_} 中。被 \texttt{\_\_all\_\_} 遗漏也意味着它们没有被 \texttt{from mypackage import *} 语句导入。仅供内部的名称被有效地隐藏了。
+
+当提供显式、稳定的 API 很重要时，这种整体方法非常有效。然而，如果你正在构建用于自己模块之间使用的 API，那么 \texttt{\_\_all\_\_} 的功能大概是多余的，应当避免使用。包所提供的命名空间通常足以让一组程序员在他们控制的大量代码上进行协作，同时保持合理的接口边界。
+
+警惕 \texttt{import *}
+
+像 \texttt{from x import y} 这样的导入语句是清晰的，因为 \texttt{y} 的来源明确是 \texttt{x} 包或模块。像 \texttt{from foo import *} 这样的通配符（wildcard）导入也可能有用，尤其是在交互式 Python 会话中。然而，通配符会让代码更难以理解：
+
+\begin{itemize}
+\item \texttt{from foo import *} 会向代码的新读者隐藏名称的来源。如果一个模块有多个 \texttt{import *} 语句，读者需要检查所有被引用的模块，才能弄清某个名称是在哪里定义的。
+\item \texttt{import *} 语句中的名称会覆盖包含模块内的任何冲突名称。这可能导致奇怪的缺陷（bug），由你的代码与连续 \texttt{import *} 语句重新赋值的名称之间的意外交互引起。
+\end{itemize}
+
+最安全的做法是避免在你的代码中使用 \texttt{import *}，并使用 \texttt{from x import y} 风格显式导入名称。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 中的包是包含其他模块的模块。包让你能够把代码组织到相互独立的、不冲突的命名空间中，并具有唯一的绝对模块名。
+\item 简单包是通过向包含其他源文件的目录添加 \texttt{\_\_init\_\_.py} 文件来定义的。这些文件成为该目录所属包的子模块。包目录也可以包含其他包。
+\item 你可以通过在模块的 \texttt{\_\_all\_\_} 特殊属性中列出其公开可见的名称，来为模块提供显式 API。
+\item 你可以通过将包 \texttt{\_\_init\_\_.py} 文件中只导入公共名称，或者通过对仅供内部的成员使用单下划线前缀命名，来隐藏包的内部实现。
+\item 在单一团队或单一代码库上进行协作时，使用 \texttt{\_\_all\_\_} 来提供显式 API 大概是多余的。
+\end{itemize}
+
+\section{Item 120: 考虑使用模块作用域代码来配置部署环境}
+
+部署环境（deployment environment）是程序运行的配置。每个程序都至少有一个部署环境：生产环境（production environment）。编写程序的初衷，就是让它在生产环境中投入使用并取得某种成果。
+
+编写或修改程序，需要能够在你用于开发的计算机上运行它。你的开发环境的配置可能与生产环境大相径庭。例如，你可能正在用一块微型单板计算机来开发一个本应在巨型超级计算机上运行的程序。
+
+像 \texttt{venv}（参见 Item 117（「使用虚拟环境获得隔离且可复现的依赖」））这样的工具，让确保所有环境都安装了相同的 Python 包变得很容易。麻烦在于，生产环境常常需要许多外部假设，而这些假设很难在开发环境中复现。
+
+例如，假设我想在 Web 服务器容器中运行一个程序，并让它访问一个数据库。每次我想修改程序代码时，都需要运行一个服务器容器、必须正确设置好数据库模式（schema），而我的程序还需要访问密码。如果我要做的只是验证对程序的一行改动是否正确，这样的代价就非常高昂。
+
+应对这类问题的最佳办法，是在启动时覆盖程序的某些部分，从而根据部署环境提供不同的功能。例如，我可以准备两个不同的 \texttt{\_\_main\_\_} 文件——一个用于生产，一个用于开发：
+
+\begin{codebox}[python]
+# dev_main.py
+TESTING = True
+import db_connection
+db = db_connection.Database()
+# prod_main.py
+TESTING = False
+import db_connection
+db = db_connection.Database()
+\end{codebox}
+
+这两个文件唯一的区别在于 \texttt{TESTING} 常量的值。程序中的其他模块随后可以导入 \texttt{\_\_main\_\_} 模块，并用 \texttt{TESTING} 的值来决定它们如何定义自己的属性：
+
+\begin{codebox}[python]
+# db_connection.py
+import __main__
+class TestingDatabase:
+    ...
+class RealDatabase:
+    ...
+if __main__.TESTING:
+    Database = TestingDatabase
+else:
+    Database = RealDatabase
+\end{codebox}
+
+这里需要注意的关键行为是：在模块作用域（module scope）中运行的代码——而不是在函数或方法内部——只是普通的 Python 代码（详见 Item 98（「用动态导入惰性加载模块以减少启动时间」））。你可以在模块层级使用 \texttt{if} 语句来决定模块将如何定义名称。这让针对各种部署环境裁剪模块变得很容易。当不需要时，你可以避免去复现诸如数据库配置这类代价高昂的假设。你可以注入本地的或伪造的实现，以简化交互式开发；或者你也可以使用模拟对象（mock）来编写测试（参见 Item 111（「用模拟对象测试具有复杂依赖的代码」））。
+
+注意：当你的部署环境配置变得非常复杂时，你应该考虑把它从 Python 常量（如 \texttt{TESTING}）中移出，放进专门的配置文件中。像内置模块 \texttt{configparser} 这样的工具，让你能够把生产配置与代码分开维护，而这一区分对于与运维（operations）团队协作至关重要。
+
+模块作用域代码除了处理外部配置外，还有更多用途。例如，如果我知道程序必须根据其宿主平台而表现不同，我可以在模块中定义顶层结构之前先检查 \texttt{sys} 模块：
+
+\begin{codebox}[python]
+# db_connection.py
+import sys
+class Win32Database:
+    ...
+class PosixDatabase:
+    ...
+if sys.platform.startswith("win32"):
+    Database = Win32Database
+else:
+    Database = PosixDatabase
+\end{codebox}
+
+类似地，我也可以使用来自 \texttt{os.environ} 的环境变量，来引导我的模块定义以符合系统的其他约束与需求。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 程序常常需要在多个部署环境中运行，而每个环境都有各自独特的假设与配置。
+\item 你可以通过在模块作用域中使用普通的 Python 语句，将模块的内容裁剪到不同的部署环境。
+\item 模块内容可以是任意外部条件的产物，包括通过 \texttt{sys} 与 \texttt{os} 模块进行的主机自省（introspection）。
+\end{itemize}
+
+\section{Item 121: 定义根异常以隔离调用方与 API}
+
+当你在定义一个模块的 API 时，你所抛出的异常，与你定义的函数和类一样，都是接口的一部分（示例可见 Item 32（「优先抛出异常而非返回 \texttt{None}」），了解其中原因）。
+
+Python 为标准库和语言本身提供了一套内置的异常层级（hierarchy）（背景知识见 Item 86（「理解 \texttt{Exception} 与 \texttt{BaseException} 的区别」））。使用内置异常类型而非定义你自己的新类型来报告错误，是有吸引力的。例如，每当有无效参数传给我的某个模块中的函数时，我可以抛出一个 \texttt{ValueError} 异常：
+
+\begin{codebox}[python]
+# my_module.py
+def determine_weight(volume, density):
+    if density <= 0:
+        raise ValueError("Density must be positive")
+    ...
+\end{codebox}
+
+在某些情况下，使用 \texttt{ValueError} 是合理的，但对于 API 来说，定义一个全新的异常层级要强大得多。我可以这样做：在我的模块中提供一个根 \texttt{Exception} 类，并让该模块抛出的所有其他异常都继承自这个根异常：
+
+\begin{codebox}[python]
+# my_module.py
+class Error(Exception):
+    """Base-class for all exceptions raised by this module."""
+class InvalidDensityError(Error):
+    """There was a problem with a provided density value."""
+class InvalidVolumeError(Error):
+    """There was a problem with the provided weight value."""
+def determine_weight(volume, density):
+    if density < 0:
+        raise InvalidDensityError("Density must be positive")
+    if volume < 0:
+        raise InvalidVolumeError("Volume must be positive")
+    if volume == 0:
+        density / volume
+\end{codebox}
+
+在模块中拥有一个根异常，能让 API 的使用者轻松捕获所有被刻意抛出的异常。例如，这里 API 的一个使用者用一条 \texttt{try}/\texttt{except} 语句来调用函数，并捕获我的根异常：
+
+\begin{codebox}[python]
+try:
+    weight = my_module.determine_weight(1, -1)
+except my_module.Error:
+    logging.exception("Unexpected error")
+>>>
+Unexpected error
+Traceback (most recent call last):
+  File ".../example.py", line 3, in <module>
+    weight = my_module.determine_weight(1, -1)
+  File ".../my_module.py", line 10, in determine_weight
+    raise InvalidDensityError("Density must be positive")
+InvalidDensityError: Density must be positive
+\end{codebox}
+
+\texttt{logging.exception} 函数会打印出被捕获异常的完整调用栈（stack trace），从而让这种情况更容易调试。\texttt{try}/\texttt{except} 还能防止我的 API 的异常向上传播得过远而破坏调用程序。它把调用代码与我的 API 隔离开来。这种隔离有三个有益的效应。
+
+第一，根异常让调用方在错误使用某个 API 时得以察觉。如果调用方正在正确地使用我的 API，他们应该捕获我刻意抛出的各种异常。如果他们没有处理这样的异常，它就会一路向上传播到捕获我模块根异常的隔离 \texttt{except} 块。
+
+那个块可以把异常提请 API 使用者注意，为他们提供一个机会去补上对遗漏异常类型的正确处理：
+
+\begin{codebox}[python]
+try:
+    weight = my_module.determine_weight(-1, 1)
+except my_module.InvalidDensityError:
+    weight = 0
+except my_module.Error:
+    logging.exception("Bug in the calling code")
+>>>
+Bug in the calling code
+Traceback (most recent call last):
+  File ".../example.py", line 3, in <module>
+    weight = my_module.determine_weight(-1, 1)
+  File ".../my_module.py", line 12, in determine_weight
+    raise InvalidVolumeError("Volume must be positive")
+InvalidVolumeError: Volume must be positive
+\end{codebox}
+
+使用根异常的第二个好处，是能帮助发现 API 模块代码中的缺陷（bug）。如果我的代码只刻意抛出我在模块层级中定义的异常，那么我的模块抛出的所有其他类型的异常，必然是我不打算抛出的那些。这些就是我 API 代码中的缺陷。
+
+使用上面的 \texttt{try}/\texttt{except} 语句，并不能把 API 使用者与我的 API 模块代码中的缺陷隔离开来。要做到这一点，调用方需要再添加一个捕获 Python 的 \texttt{Exception} 基类的 \texttt{except} 块（详见 Item 85（「当心捕获 \texttt{Exception} 类」））。
+
+这让 API 使用者能够检测 API 模块实现中需要修复的缺陷。
+
+这个示例的输出同时包含了 \texttt{logging.exception} 的消息，以及该异常被重新抛出（re-raised）后的默认解释器（interpreter）输出：
+
+\begin{codebox}[python]
+try:
+    weight = my_module.determine_weight(0, 1)
+except my_module.InvalidDensityError:
+    weight = 0
+except my_module.Error:
+    logging.exception("Bug in the calling code")
+except Exception:
+    logging.exception("Bug in the API code!")
+    raise  # 将异常重新抛给调用方
+>>>
+Bug in the API code!
+Traceback (most recent call last):
+  File ".../example.py", line 3, in <module>
+    weight = my_module.determine_weight(0, 1)
+  File ".../my_module.py", line 14, in determine_weight
+    density / volume
+    ~~~~~~~~^~~~~~~~
+ZeroDivisionError: division by zero
+Traceback ...
+ZeroDivisionError: division by zero
+\end{codebox}
+
+使用根异常的第三个影响，是让 API 能够面向未来。随着时间推移，我可能想扩展我的 API，以便在某些情形下提供更具体的异常。例如，我可以添加一个 \texttt{Exception} 子类，用于表示提供了负密度这一错误状况：
+
+\begin{codebox}[python]
+# my_module.py
+...
+class NegativeDensityError(InvalidDensityError):
+    """A provided density value was negative."""
+...
+def determine_weight(volume, density):
+    if density < 0:
+        raise NegativeDensityError("Density must be positive")
+    ...
+\end{codebox}
+
+调用代码会一如既往地继续工作，因为它已经捕获了 \texttt{InvalidDensityError} 异常（\texttt{NegativeDensityError} 的父类）。将来，调用方可以决定对这种新型异常做特殊处理，并相应地改变处理行为：
+
+\begin{codebox}[python]
+try:
+    weight = my_module.determine_weight(1, -1)
+except my_module.NegativeDensityError:
+    raise ValueError("Must supply non-negative density")
+except my_module.InvalidDensityError:
+    weight = 0
+except my_module.Error:
+    logging.exception("Bug in the calling code")
+except Exception:
+    logging.exception("Bug in the API code!")
+    raise
+>>>
+Traceback ...
+NegativeDensityError: Density must be positive
+The above exception was the direct cause of the following
+' exception:
+Traceback ...
+ValueError: Must supply non-negative density
+\end{codebox}
+
+我还可以通过在根异常之下提供更广泛的一组异常，来把 API 的面向未来做得更进一步。例如，想象一下，我有一组与计算重量相关的错误、另一组与计算体积相关、第三组与计算密度相关：
+
+\begin{codebox}[python]
+# my_module.py
+class Error(Exception):
+    """Base-class for all exceptions raised by this module."""
+class WeightError(Error):
+    """Base-class for weight calculation errors."""
+class VolumeError(Error):
+    """Base-class for volume calculation errors."""
+class DensityError(Error):
+    """Base-class for density calculation errors."""
+...
+\end{codebox}
+
+具体的异常会继承这些通用异常。每个中间异常都充任它自身的一种根异常。这让基于宽泛的功能，把一层层的调用代码与 API 代码隔离开来变得更容易。这比让所有调用方去捕获一长串非常具体的 \texttt{Exception} 子类要好得多。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 当一个模块定义了根异常且只抛出其子类时，API 使用者就有了一个简单的方法来将自身与该模块遇到的意外情况隔离开来。
+\item 捕获根异常，可以帮助你发现消费（consume）某个 API 的代码中的缺陷。
+\item 捕获 Python 的 \texttt{Exception} 基类，可以帮助你发现 API 实现中的缺陷。
+\item 中间根异常让你在未来抛出更具体类型的异常，而无需破坏 API 使用者。
+\end{itemize}
+
+\section{Item 122: 了解如何打破循环依赖}
+
+不可避免地，当你与他人协作时，会发现模块（module）之间存在相互依赖。即使是你独自开发一个程序的各个部分，也可能遇到这种情况。
+
+例如，假设我想让 GUI 应用程序弹出一个对话框（dialog），让用户选择保存文档的位置。对话框显示的数据可以通过传给事件处理函数的参数来指定。但对话框还需要读取全局状态（比如用户偏好设置），才能知道如何正确地渲染。
+
+下面我定义一个对话框，它会从全局偏好设置中读取文档的默认保存位置：
+
+\begin{codebox}[python]
+# dialog.py
+import app
+class Dialog:
+    def __init__(self, save_dir):
+        self.save_dir = save_dir
+    ...
+save_dialog = Dialog(app.prefs.get("save_dir"))
+def show():
+    ...
+\end{codebox}
+
+问题在于，包含 \texttt{prefs} 对象的 \texttt{app} 模块（module）也会导入 \texttt{dialog} 类（class），以便在程序启动时显示同一个对话框：
+
+\begin{codebox}[python]
+# app.py
+import dialog
+class Prefs:
+    ...
+    def get(self, name):
+        ...
+prefs = Prefs()
+dialog.show()
+\end{codebox}
+
+这是一个循环依赖（circular dependency）。如果我像下面这样从主程序导入 \texttt{app} 模块（module）：
+
+\begin{codebox}[python]
+# main.py
+import app
+\end{codebox}
+
+就会抛出异常：
+
+\begin{codebox}[python]
+$ python3 main.py
+Traceback (most recent call last):
+  File ".../main.py", line 4, in <module>
+    import app
+  File ".../app.py", line 4, in <module>
+    import dialog
+  File ".../dialog.py", line 15, in <module>
+    save_dialog = Dialog(app.prefs.get("save_dir"))
+                         ^^^^^^^^^
+AttributeError: partially initialized module 'app' has no
+' attribute 'prefs' (most likely due to a circular import)
+\end{codebox}
+
+要理解这里发生了什么，你需要了解 Python 的导入机制（import machinery）大体上是如何工作的。当一个模块（module）被导入（import）时，Python 实际上会按深度优先（depth-first）的顺序执行以下操作（完整细节见 https://docs.python.org/3/library/importlib.html）：
+
+\begin{enumerate}
+\item 在 \texttt{sys.path} 所列的位置中搜索该模块
+\item 从模块加载代码，并确保其能够编译
+\item 创建一个对应的空模块（module）对象
+\item 将该模块插入 \texttt{sys.modules}
+\item 运行该模块对象中的代码，以定义其内容
+\end{enumerate}
+
+循环依赖（circular dependency）的问题在于，模块（module）的属性（attribute）要等到定义这些属性的代码执行完（即第 5 步之后）才算定义好。但是，模块一旦被插入 \texttt{sys.modules}（第 4 步之后），就可以被 \texttt{import} 语句加载。
+
+在上面的例子中，\texttt{app} 模块（module）在定义任何内容之前就导入了 \texttt{dialog}。接着 \texttt{dialog} 模块（module）又导入 \texttt{app}。由于 \texttt{app} 尚未运行完毕——它此刻正在导入 \texttt{dialog}——所以 \texttt{app} 模块（module）是空的（来自第 4 步）。\texttt{AttributeError} 异常被抛出（在 \texttt{dialog} 的第 5 步期间），因为定义 \texttt{prefs} 的代码还没有运行（也就是说，\texttt{app} 的第 5 步尚未完成）。
+
+解决这个问题最好的办法是重构（refactor）代码，让 \texttt{prefs} 数据结构位于依赖树（dependency tree）的底部。这样一来，\texttt{app} 和 \texttt{dialog} 都可以导入同一个工具模块（module），从而避免任何循环依赖（circular dependency）。但这种清晰的划分并非总是可行，或者可能需要大量重构（refactor）才值得。
+
+还有另外三种打破循环依赖（circular dependency）的方法。
+
+\subsection{调整导入顺序}
+
+解决循环导入（circular import）问题的第一种方法是改变导入（import）的顺序。例如，如果我把 \texttt{dialog} 模块（module）的导入（import）移到 \texttt{app} 模块（module）的底部，也就是在 \texttt{app} 模块（module）的其他内容都已运行之后再导入，\texttt{AttributeError} 异常就会消失：
+
+\begin{codebox}[python]
+# app.py
+class Prefs:
+    ...
+prefs = Prefs()
+import dialog  # 已移动
+dialog.show()
+\end{codebox}
+
+这之所以有效，是因为当 \texttt{dialog} 模块（module）被较晚加载时，它对 \texttt{app} 的递归（recursive）导入（import）会发现 \texttt{app.prefs} 已经被定义（也就是说，\texttt{app} 的第 5 步基本已完成）。
+
+尽管这种办法能避开 \texttt{AttributeError} 异常，但它违背了 PEP 8 风格指南（style guide）（参见 Item 2：遵循 PEP 8 风格指南）。该风格指南建议始终把导入（import）放在 Python 文件（file）的顶部。这样新读代码的人能清楚地看到模块（module）的依赖关系。它还能确保你所依赖的任何模块（module）都在作用域（scope）内，可供模块（module）中的所有代码使用。
+
+把导入（import）放在文件（file）靠后的位置会很脆弱，代码中导入顺序的一点小改动就可能让整个模块（module）彻底崩溃。
+
+我建议不要用调整导入（import）顺序的办法来解决循环依赖（circular dependency）问题。
+
+\subsection{导入、配置、运行}
+
+解决循环导入（circular import）问题的第二种办法，是让模块（module）在导入（import）时尽量减小副作用（side effect）。例如，我可以让自己的模块（module）只定义函数、类（class）和常量（constant）。我特意避免在导入（import）时运行任何函数。然后我让每个模块（module）都提供一个 \texttt{configure} 函数，等所有其他模块（module）都导入（import）完成后我再调用它。\texttt{configure} 的目的是通过访问其他模块（module）的属性（attribute）来准备各自模块（module）的状态。我在所有模块（module）都导入（import）完毕后再运行 \texttt{configure}（也就是第 5 步完成时），因此所有属性（attribute）必然都已定义。
+
+下面我重新定义 \texttt{dialog} 模块（module），让它在 \texttt{configure} 被调用时才去访问 \texttt{prefs} 对象：
+
+\begin{codebox}[python]
+# dialog.py
+import app
+class Dialog:
+    ...
+save_dialog = Dialog()
+def show():
+    ...
+def configure():
+    save_dialog.save_dir = app.prefs.get("save_dir")
+\end{codebox}
+
+我也重新定义 \texttt{app} 模块（module），让它在导入（import）时不执行任何操作：
+
+\begin{codebox}[python]
+# app.py
+import dialog
+class Prefs:
+    ...
+prefs = Prefs()
+def configure():
+    ...
+\end{codebox}
+
+最后，\texttt{main} 模块（module）的执行分为三个不同的阶段——导入（import）全部内容、配置（configure）全部内容、运行（run）第一个活动：
+
+\begin{codebox}[python]
+# main.py
+import app
+import dialog
+app.configure()
+dialog.configure()
+dialog.show()
+\end{codebox}
+
+这在很多情况下都很有效，并且能支持依赖注入（dependency injection）之类的模式（类似的例子参见 Item 112：封装依赖以方便模拟（mock）与测试）。但有时很难把代码组织成可以显式执行 \texttt{configure} 步骤的结构。在模块（module）内部划分两个不同阶段，还会让代码更难读，因为它把对象的定义与其配置（configuration）分离开了。
+
+\subsection{动态导入}
+
+解决循环导入（circular import）问题的第三种——往往也最简单——的办法，是在函数或方法（method）内部使用 \texttt{import} 语句。这被称为动态导入（dynamic import），因为模块（module）的导入（import）发生在程序运行期间，而不是在程序刚启动、初始化各模块（module）的时候。
+
+下面我重新定义 \texttt{dialog} 模块（module）以使用动态导入（dynamic import）。\texttt{dialog.show} 函数在运行时导入（import）\texttt{app} 模块（module），而不是让 \texttt{dialog} 模块（module）在初始化时导入 \texttt{app}：
+
+\begin{codebox}[python]
+# dialog.py
+class Dialog:
+    ...
+save_dialog = Dialog()
+def show():
+    import app  # 动态导入
+    save_dialog.save_dir = app.prefs.get("save_dir")
+    ...
+\end{codebox}
+
+现在 \texttt{app} 模块（module）可以和最开始的例子一样。它在顶部导入（import）\texttt{dialog}，并在底部调用 \texttt{dialog.show}：
+
+\begin{codebox}[python]
+# app.py
+import dialog
+class Prefs:
+    ...
+prefs = Prefs()
+dialog.show()
+\end{codebox}
+
+这种办法与之前的「导入（import）、配置（configure）、运行（run）」步骤效果相似。区别在于，它不需要对模块（module）的定义和导入（import）方式做任何结构性改动。我只是把循环导入（circular import）推迟到我必须访问另一个模块（module）的那一刻。到那时，我几乎可以确信所有其他模块（module）都已完成初始化（因为第 5 步对所有模块都已结束）。
+
+总的来说，最好避免这类动态导入（dynamic import）。\texttt{import} 语句的开销不可忽略，在紧凑循环（tight loop）中尤其糟糕（例子参见 Item 98：用动态导入惰性加载模块以减少启动时间）。由于推迟了执行，动态导入（dynamic import）还会让你在运行时遭遇出人意料的失败，比如程序启动运行很久之后才抛出 \texttt{SyntaxError} 异常（如何避免这种情况，参见 Item 108：在 \texttt{TestCase} 子类中验证相关行为）。不过，这些缺点通常仍好过把整个程序重构（refactor）一遍。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 当两个模块（module）必须在导入（import）时互相调用，就会发生循环依赖（circular dependency）。它们可能导致你的程序在启动时崩溃。
+\item 打破循环依赖（circular dependency）最好的办法，是把相互的依赖关系重构（refactor）到一个位于依赖树（dependency tree）底部的独立模块（module）中。
+\item 动态导入（dynamic import）是打破模块（module）间循环依赖（circular dependency）最简单的办法，同时能把重构（refactor）和复杂度（complexity）降到最低。
+\end{itemize}
+
+\section{Item 123: 考虑用警告来推动重构与迁移用法}
+
+API（应用程序编程接口，Application Programming Interface）为了满足新的需求而发生变更是很自然的事，这些新需求往往是过去未曾预料到的。当一个 API 规模很小、上下游依赖（dependency）很少时，进行这样的变更是直截了当的。一名程序员常常可以在对源代码仓库（repository）的一次提交（commit）中，就更新一个小型 API 及其所有调用方（caller）。然而，随着代码库（codebase）的增长，一个 API 的调用方数量可能变得极其庞大，或者分散在多个仓库中，以至于要同步地变更 API 并更新调用方来与之匹配，已经变得不可行或不切实际。这时，你需要一种方式来通知并鼓励与你协作的人，让他们重构自己的代码，并把对 API 的调用迁移到最新的形式。
+
+举例来说，假设我想提供一个模块（module），用于计算一辆汽车在给定的平均速度和行驶时长下能走多远。这里我定义这样一个函数，并假设速度的单位是英里每小时（miles per hour），时长的单位是小时（hours）：
+
+\begin{codebox}[python]
+def print_distance(speed, duration):
+    distance = speed * duration
+    print(f"{distance} miles")
+print_distance(5, 2.5)
+>>>
+12.5 miles
+\end{codebox}
+
+设想一下，这个函数的效果非常好，以至于我很快就为它积累了大量的依赖（dependency）。与我协作的其他程序员，在我们的共享代码库（codebase）各处都需要像这样计算和打印距离。
+
+尽管它很成功，但这个实现（implementation）很容易出错，因为参数的单位是隐式的（implicit）。例如，如果我想知道一颗子弹以每秒 1000 米的速度飞行 3 秒能走多远，我会得到错误的结果：
+
+\begin{codebox}[python]
+print_distance(1000, 3)
+>>>
+3000 miles
+\end{codebox}
+
+我可以解决（address）这个问题，方法是扩展 \texttt{print\_distance} 的 API，加入可选的关键字参数（keyword argument）（参见 Item 37「用仅限关键字与仅限位置参数来保证清晰」），用于指定 \texttt{speed}、\texttt{duration} 以及要打印出来的计算结果距离的单位：
+
+\begin{codebox}[python]
+CONVERSIONS = {
+    "mph": 1.60934 / 3600 * 1000,  # 米/秒
+    "hours": 3600,                 # 秒
+    "miles": 1.60934 * 1000,       # 米
+    "meters": 1,                   # 米
+    "m/s": 1,                      # 米/秒
+    "seconds": 1,                  # 秒
+}
+def convert(value, units):
+    rate = CONVERSIONS[units]
+    return rate * value
+def localize(value, units):
+    rate = CONVERSIONS[units]
+    return value / rate
+def print_distance(
+    speed,
+    duration,
+    *,
+    speed_units="mph",
+    time_units="hours",
+    distance_units="miles",
+):
+    norm_speed = convert(speed, speed_units)
+    norm_duration = convert(duration, time_units)
+    norm_distance = norm_speed * norm_duration
+    distance = localize(norm_distance, distance_units)
+    print(f"{distance} {distance_units}")
+\end{codebox}
+
+现在我就能修改那次唯一的调用，并通过换算成英里而得到一个准确的结果：
+
+\begin{codebox}[python]
+print_distance(
+    1000,
+    3,
+    speed_units="meters",
+    time_units="seconds",
+)
+>>>
+1.8641182099494205 miles
+\end{codebox}
+
+看来，要求为这个函数明确指定单位是一种好得多的做法。把它们显式地写出来，能降低出错的可能性，也让阅读这段代码的新人更容易理解。但是，我该如何把 API 的所有调用方都迁移到「始终指定单位」上来呢？我又要如何在尽量减少那些依赖 \texttt{print\_distance} 的代码被破坏（breakage）的同时，又鼓励调用方尽快采用这些新的单位参数呢？
+
+为此，Python 提供了内置（built-in）的 \texttt{warnings} 模块（警告模块）。使用 \texttt{warnings} 是一种以编程方式，告知其他程序员：由于他们所依赖的某个底层库发生了变更，他们的代码需要被修改。虽然异常（exception）主要是供机器做自动化的错误处理（参见 Item 81「用 \texttt{assert} 检查内部假设、用 \texttt{raise} 报告未达预期」），但警告（warning）完全是关于人与人之间的沟通——沟通他们在彼此协作时应当预期些什么。
+
+我可以修改 \texttt{print\_distance}，让它在没有传入用于指定单位的可选关键字参数时发出警告（warning）。这样一来，这些参数可以在一段时间内继续作为可选项，同时向运行依赖程序的人发出明确的通知：如果他们不采取行动，将来就应当预期到代码会被破坏（breakage）：
+
+\begin{codebox}[python]
+import warnings
+def print_distance(
+    speed,
+    duration,
+    *,
+    speed_units=None,
+    time_units=None,
+    distance_units=None,
+):
+    if speed_units is None:
+        warnings.warn(
+            "speed_units required",
+            DeprecationWarning,
+        )
+        speed_units = "mph"
+    if time_units is None:
+        warnings.warn(
+            "time_units required",
+            DeprecationWarning,
+        )
+        time_units = "hours"
+    if distance_units is None:
+        warnings.warn(
+            "distance_units required",
+            DeprecationWarning,
+        )
+        distance_units = "miles"
+    norm_speed = convert(speed, speed_units)
+    norm_duration = convert(duration, time_units)
+    norm_distance = norm_speed * norm_duration
+    distance = localize(norm_distance, distance_units)
+    print(f"{distance} {distance_units}")
+\end{codebox}
+
+我可以通过用与之前相同的参数调用该函数，并捕获来自 \texttt{warnings} 模块的 \texttt{sys.stderr} 输出，来验证这段代码确实发出了警告：
+
+\begin{codebox}[python]
+import contextlib
+import io
+fake_stderr = io.StringIO()
+with contextlib.redirect_stderr(fake_stderr):
+    print_distance(
+        1000,
+        3,
+        speed_units="meters",
+        time_units="seconds",
+    )
+print(fake_stderr.getvalue())
+>>>
+1.8641182099494205 miles
+.../example.py:121: DeprecationWarning: distance_units required
+  warnings.warn(
+\end{codebox}
+
+给这个函数添加警告，需要写大量重复的样板代码（boilerplate），既难读又难维护。此外，警告信息标出的是调用 \texttt{warning.warn} 的那一行，但我真正想指出的是：调用 \texttt{print\_distance} 却没有传入那些即将变为必填的关键字参数的地方。
+
+幸运的是，\texttt{warnings.warn} 函数支持 \texttt{stacklevel} 参数（parameter），它能让我们把调用栈（stack）中正确的位置报告为警告的根源。\texttt{stacklevel} 还让我们可以轻松编写能够「替别的代码发出警告」的函数，从而减少样板代码。这里我定义一个辅助（helper）函数：如果某个可选参数没有被传入，它就发出警告，然后为这个参数提供默认值：
+
+\begin{codebox}[python]
+def require(name, value, default):
+    if value is not None:
+        return value
+    warnings.warn(
+        f"{name} will be required soon, update your code",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return default
+def print_distance(
+    speed,
+    duration,
+    *,
+    speed_units=None,
+    time_units=None,
+    distance_units=None,
+):
+    speed_units = require(
+        "speed_units",
+        speed_units,
+        "mph",
+    )
+    time_units = require(
+        "time_units",
+        time_units,
+        "hours",
+    )
+    distance_units = require(
+        "distance_units",
+        distance_units,
+        "miles",
+    )
+    norm_speed = convert(speed, speed_units)
+    norm_duration = convert(duration, time_units)
+    norm_distance = norm_speed * norm_duration
+    distance = localize(norm_distance, distance_units)
+    print(f"{distance} {distance_units}")
+\end{codebox}
+
+我可以通过检查捕获到的输出来验证：它会把正确的「肇事行」传播出来：
+
+\begin{codebox}[python]
+import contextlib
+import io
+fake_stderr = io.StringIO()
+with contextlib.redirect_stderr(fake_stderr):
+    print_distance(
+        1000,
+        3,
+        speed_units="meters",
+        time_units="seconds",
+    )
+print(fake_stderr.getvalue())
+>>>
+1.8641182099494205 miles
+.../example.py:208: DeprecationWarning: distance_units will be
+'required soon, update your code
+  print_distance(
+\end{codebox}
+
+\texttt{warnings} 模块还允许你配置：当遇到警告时应当发生什么。其中一种选择是把所有警告都变成错误（error），这样警告就会以异常（exception）的形式被抛出，而不是被打印到 \texttt{sys.stderr}：
+
+\begin{codebox}[python]
+warnings.simplefilter("error")
+try:
+    warnings.warn(
+        "This usage is deprecated",
+        DeprecationWarning,
+    )
+except DeprecationWarning:
+    pass  # Expected
+\end{codebox}
+
+这种抛出异常的行为，对于自动化测试（automated test）尤其有用，它能检测上游依赖（upstream dependency）中的变更，并相应地让测试失败。利用这样的测试失败，能很好地向你协作的对象清楚地表明：他们需要更新自己的代码了。你可以借助传给 Python 解释器（interpreter）的命令行参数（command-line argument）\texttt{-W error}，或者环境变量（environment variable）\texttt{PYTHONWARNINGS}，来应用这一策略：
+
+\begin{codebox}[python]
+$ python3 -W error example_test.py
+Traceback (most recent call last):
+  File ".../example_test.py", line 6, in <module>
+    warnings.warn("This might raise an exception!")
+UserWarning: This might raise an exception!
+\end{codebox}
+
+一旦那些负责维护依赖某个已弃用（deprecated）API 的代码的人意识到自己必须进行迁移（migration），他们就可以通过 \texttt{simplefilter} 和 \texttt{filterwarnings} 这两个函数，告诉 \texttt{warnings} 模块忽略这个错误（参见 https://docs.python.org/3/library/warnings 了解详情）：
+
+\begin{codebox}[python]
+warnings.simplefilter("ignore")
+warnings.warn("This will not be printed to stderr")
+\end{codebox}
+
+在一个程序被部署（deploy）到生产环境（production）之后，让警告引发错误就变得不合时宜了，因为它们可能在关键时刻使程序崩溃（crash）。更好的做法是把警告复制到内置（built-in）的 \texttt{logging} 模块（日志模块）中。这里我通过调用 \texttt{logging.captureWarnings} 函数，并配置与之对应的 \texttt{"py.warnings"} 日志记录器（logger）来实现这一点：
+
+\begin{codebox}[python]
+import logging
+fake_stderr = io.StringIO()
+handler = logging.StreamHandler(fake_stderr)
+formatter = logging.Formatter(
+    "%(asctime)-15s WARNING] %(message)s")
+handler.setFormatter(formatter)
+logging.captureWarnings(True)
+logger = logging.getLogger("py.warnings")
+logger.addHandler(handler)
+logger.setLevel(logging.DEBUG)
+warnings.resetwarnings()
+warnings.simplefilter("default")
+warnings.warn("This will go to the logs output")
+print(fake_stderr.getvalue())
+>>>
+2019-06-11 19:48:19,132 WARNING] .../example.py:227:
+UserWarning: This will go to the logs output
+  warnings.warn("This will go to the logs output")
+\end{codebox}
+
+用 \texttt{logging} 来捕获警告，能保证我的程序已有的任何错误上报（error-reporting）系统，也能在生产环境中收到重要警告的通知。如果我的测试没有覆盖到程序在实际使用时可能遇到的每一个边界情况（edge case），这种做法尤其有用。
+
+API 库的维护者（maintainer）还应当编写单元测试（unit test），以验证：在正确的情形下，会生成带有清晰、可操作（actionable）信息的警告（参见 Item 108「在 \texttt{TestCase} 子类中验证相关行为」）。这里我把 \texttt{warnings.catch\_warnings} 函数用作上下文管理器（context manager）（背景知识参见 Item 82「考虑用 \texttt{contextlib} 和 \texttt{with} 语句实现可复用的 \texttt{try}/\texttt{finally} 行为」），来包裹我对前面定义的 \texttt{require} 函数的调用：
+
+\begin{codebox}[python]
+with warnings.catch_warnings(record=True) as found_warnings:
+    found = require("my_arg", None, "fake units")
+    expected = "fake units"
+    assert found == expected
+\end{codebox}
+
+一旦我收集到了这些警告消息，我就能验证：它们的数量、详细的消息内容以及类别（category）都符合我的预期：
+
+\begin{codebox}[python]
+assert len(found_warnings) == 1
+single_warning = found_warnings[0]
+assert str(single_warning.message) == (
+    "my_arg will be required soon, update your code"
+)
+assert single_warning.category == DeprecationWarning
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{warnings} 模块可用于就已被弃用（deprecated）的用法，通知你的 API 的调用方（caller）。警告消息会鼓励这些调用方在后续的变更破坏他们的程序之前，先修复自己的代码。
+\item 利用传给 Python 解释器（interpreter）的命令行参数（command-line argument）\texttt{-W error}，把警告作为错误抛出。这在自动化测试（automated test）中尤其有用，能捕获依赖项潜在的回归（regression）。
+\item 在生产环境（production）中，你可以把警告复制到 \texttt{logging} 模块（日志模块），以确保你现有的错误上报（error-reporting）系统能在运行时捕获这些警告。
+\item 为你代码所生成的警告编写测试是很有用的，这能确保：在你任何下游（downstream）依赖中，这些警告都会在最恰当的时机被触发。
+\end{itemize}
+
+\section{Item 124: 考虑通过 typing 进行静态分析以消除 Bug}
+
+提供文档（documentation）是帮助用户正确使用 API 的好方法（参见 Item 118：为每一个函数、类和模块编写文档字符串），但这通常还不够，错误的用法仍然会引发 Bug。理想情况下，应当存在一种程序化的机制，能够验证调用方是否以正确的方式使用你的 API，并且你也能正确地使用下游依赖。许多编程语言通过编译期类型检查（compile-time type checking）来满足这部分需求，它可以识别并消除某些类别的 Bug。
+
+历史上，Python 一直专注于动态特性（dynamism），没有提供任何种类的编译期类型安全（compile-time type safety）（参见 Item 3：不要指望 Python 在编译期检测错误）。然而，近些年来 Python 引入了特殊语法和内置的 \texttt{typing} 模块（module），允许你为变量、类字段、函数和方法标注类型信息。这些类型提示（type hint）支持渐进式类型标注（gradual typing），这意味着代码库可以按需逐步更新以指定类型。
+
+为 Python 程序添加类型信息的好处在于，你可以运行静态分析（static analysis）工具来处理程序的源代码，并识别出 Bug 最有可能出现的位置。\texttt{typing} 内置模块本身并不实际实现任何类型检查（type checking）功能。它只是提供了一个通用库（library），用于定义可应用于 Python 代码、并由独立工具消费的类型。
+
+正如 Python 解释器（interpreter）有多种不同的实现（例如 CPython、PyPy；参见 Item 1：了解你正在使用的 Python 版本）一样，使用 \texttt{typing} 的 Python 静态分析工具也有多种实现。在撰写本书时，最流行的工具是 \texttt{mypy}（https://github.com/python/mypy）、\texttt{pyright}（https://github.com/microsoft/pyright）、\texttt{pyre}（https://pyre-check.org）和 \texttt{pytype}（https://github.com/google/pytype）。本书中的 \texttt{typing} 示例，我都使用了带有 \texttt{--strict} 标志（flag）的 \texttt{mypy}，它会启用该工具支持的所有各类警告。下面是在命令行运行该命令的示例：
+
+\begin{codebox}[python]
+$ python3 -m mypy --strict example.py
+\end{codebox}
+
+这些工具可以在程序运行之前检测出大量常见错误，从而在拥有良好测试（test）之外再提供一层额外的安全性（参见 Item 109：优先使用集成测试而非单元测试）。例如，你能找出导致下面这个简单函数编译通过、却在运行时抛出异常（exception）的 Bug 吗？
+
+\begin{codebox}[python]
+def subtract(a, b):
+    return a - b
+subtract(10, "5")
+>>>
+Traceback ...
+TypeError: unsupported operand type(s) for -: 'int' and 'str'
+\end{codebox}
+
+参数和变量的类型标注（type annotation）用冒号分隔（例如 \texttt{name: type}）。返回值类型通过在参数列表之后使用 \texttt{-> type} 来指定。借助这样的类型标注和 \texttt{mypy}，我可以轻松发现这个 Bug：
+
+\begin{codebox}[python]
+def subtract(a: int, b: int) -> int:  # 函数标注
+    return a - b
+subtract(10, "5")  # 哎呀：传入了字符串值
+$ python3 -m mypy --strict example.py
+.../example.py:4: error: Argument 2 to "subtract" has
+' incompatible type "str"; expected "int"  [arg-type]
+Found 1 error in 1 file (checked 1 source file)
+\end{codebox}
+
+类型标注也可以应用于类（class）。例如，下面这个类中有两个 Bug，它们在程序运行时会引发异常（exception）：
+
+\begin{codebox}[python]
+class Counter:
+    def __init__(self):
+        self.value = 0
+    def add(self, offset):
+        value += offset
+    def get(self) -> int:
+        self.value
+\end{codebox}
+
+第一个 Bug 出现在我调用 \texttt{add} 方法时：
+
+\begin{codebox}[python]
+counter = Counter()
+counter.add(5)
+>>>
+Traceback ...
+UnboundLocalError: cannot access local variable 'value' where
+it is not associated with a value
+\end{codebox}
+
+第二个 Bug 出现在我调用 \texttt{get} 时：
+
+\begin{codebox}[python]
+counter = Counter()
+found = counter.get()
+assert found == 0, found
+>>>
+Traceback ...
+AssertionError: None
+\end{codebox}
+
+这两个问题都可以由 \texttt{mypy} 提前轻松发现：
+
+\begin{codebox}[python]
+class Counter:
+    def __init__(self) -> None:
+        self.value: int = 0  # 字段 / 变量标注
+    def add(self, offset: int) -> None:
+        value += offset      # 哎呀：忘了写 "self."
+    def get(self) -> int:
+        self.value           # 哎呀：忘了写 "return"
+counter = Counter()
+counter.add(5)
+counter.add(3)
+assert counter.get() == 8
+$ python3 -m mypy --strict example.py
+.../example.py:9: error: Name "value" is not defined
+'[name-defined]
+.../example.py:11: error: Missing return statement  [return]
+Found 2 errors in 1 file (checked 1 source file)
+\end{codebox}
+
+Python 动态特性（dynamism）的优势之一，是能够编写作用于鸭子类型（duck type）上的通用功能（参见 Item 25：依赖字典插入顺序时要谨慎和 Item 57：为自定义容器类型继承 \texttt{collections.abc} 中的类）。这让一份实现可以接受广泛的类型，从而省去大量重复工作并简化测试（test）。这里我定义了这样一个通用函数，用于将列表中的值组合起来，但最后一行的 \texttt{assert} 语句却因一个不显眼的原因而失败：
+
+\begin{codebox}[python]
+def combine(func, values):
+    assert len(values) > 0
+    result = values[0]
+    for next_value in values[1:]:
+        result = func(result, next_value)
+    return result
+def add(x, y):
+    return x + y
+inputs = [1, 2, 3, 4j]
+result = combine(add, inputs)
+assert result == 10, result  # 失败
+>>>
+Traceback ...
+AssertionError: (6+4j)
+\end{codebox}
+
+我可以利用 \texttt{typing} 模块对泛型（generics）的支持来为这个函数标注类型，从而在静态时检测出这个问题：
+
+\begin{codebox}[python]
+from collections.abc import Callable
+from typing import TypeVar
+Value = TypeVar("Value")
+Func = Callable[[Value, Value], Value]
+def combine(func: Func[Value], values: list[Value]) -> Value:
+    assert len(values) > 0
+    result = values[0]
+    for next_value in values[1:]:
+        result = func(result, next_value)
+    return result
+Real = TypeVar("Real", int, float)
+def add(x: Real, y: Real) -> Real:
+    return x + y
+inputs = [1, 2, 3, 4j]  # 哎呀：混入了一个复数
+result = combine(add, inputs)
+assert result == 10
+$ python3 -m mypy --strict example.py
+.../example.py:22: error: Argument 1 to "combine" has
+'incompatible type "Callable[[Real, Real], Real]"; expected
+'"Callable[[complex, complex], complex]"  [arg-type]
+Found 1 error in 1 file (checked 1 source file)
+\end{codebox}
+
+另一个极其常见的错误是，在你以为会有一个有效对象的地方却出现了 \texttt{None} 值（参见 Item 32：优先抛出异常而非返回 \texttt{None}）。这个问题会影响看似简单的代码，比如下面这段最后一行 \texttt{assert} 语句失败的代码片段：
+
+\begin{codebox}[python]
+def get_or_default(value, default):
+    if value is not None:
+        return value
+    return value
+found = get_or_default(3, 5)
+assert found == 3
+found = get_or_default(None, 5)
+assert found == 5, found  # 失败
+>>>
+Traceback ...
+AssertionError: None
+\end{codebox}
+
+\texttt{typing} 模块支持可选（option）类型——用 \texttt{type | None} 表示——它能确保程序只有在执行了恰当的空值检查（null check）之后，才会与这些值交互。这让 \texttt{mypy} 能够推断出这段代码中存在 Bug。return 语句中使用的类型必须是 \texttt{None}，而这与该函数的签名（signature）所要求的 \texttt{int} 类型并不匹配：
+
+\begin{codebox}[python]
+def get_or_default(value: int | None, default: int) -> int:
+    if value is not None:
+        return value
+    return value  # 哎呀：本应返回 "default"
+$ python3 -m mypy --strict example.py
+.../example.py:4: error: Incompatible return value type
+' (got "None", expected "int")  [return-value]
+Found 1 error in 1 file (checked 1 source file)
+\end{codebox}
+
+\texttt{typing} 模块中还提供了种类繁多的其他可选（option）类型。（完整细节参见 https://docs.python.org/3/library/typing.html。）值得注意的是，异常（exception）并不包含在内。与 Java 不同——Java 拥有受检异常（checked exception），会在每个方法的 API 边界强制执行——Python 的类型标注更接近于 C\#：异常不被视为接口（interface）定义的一部分。因此，如果你想要验证自己是否正确抛出和捕获了异常，就需要编写测试（test）。
+
+使用 \texttt{typing} 模块时的一个常见陷阱（gotcha）出现在需要处理前向引用（forward reference）时（类似的问题可参见 Item 122：了解如何打破循环依赖）。例如，假设我有两个类，其中一个持有对另一个的引用（reference）。通常这些类的定义顺序无关紧要，因为在程序后面创建它们的实例之前，它们都会被定义好：
+
+\begin{codebox}[python]
+class FirstClass:
+    def __init__(self, value):
+        self.value = value
+class SecondClass:
+    def __init__(self, value):
+        self.value = value
+second = SecondClass(5)
+first = FirstClass(second)
+\end{codebox}
+
+如果你为这个程序加上类型提示（type hint）并运行 \texttt{mypy}，它会报告没有任何问题：
+
+\begin{codebox}[python]
+class FirstClass:
+    def __init__(self, value: SecondClass) -> None:
+        self.value = value
+class SecondClass:
+    def __init__(self, value: int) -> None:
+        self.value = value
+second = SecondClass(5)
+first = FirstClass(second)
+$ python3 -m mypy --strict example.py
+Success: no issues found in 1 source file
+\end{codebox}
+
+然而，如果你真正尝试运行这段代码，它会失败，因为 \texttt{SecondClass} 在尚未被实际定义之前，就被 \texttt{FirstClass.\_\_init\_\_} 方法的参数中的类型标注引用了：
+
+\begin{codebox}[python]
+class FirstClass:
+    def __init__(self, value: SecondClass) -> None:  # 会出错
+        self.value = value
+class SecondClass:
+    def __init__(self, value: int) -> None:
+        self.value = value
+second = SecondClass(5)
+first = FirstClass(second)
+>>>
+Traceback ...
+NameError: name 'SecondClass' is not defined
+\end{codebox}
+
+这些静态分析工具所推荐的解决方案（workaround）是使用一个包含前向引用（forward reference）的字符串作为类型标注。该字符串值随后会被解析和求值，以提取出要检查的类型信息：
+
+\begin{codebox}[python]
+class FirstClass:
+    def __init__(self, value: "SecondClass") -> None:  # 可行
+        self.value = value
+class SecondClass:
+    def __init__(self, value: int) -> None:
+        self.value = value
+second = SecondClass(5)
+first = FirstClass(second)
+\end{codebox}
+
+既然你已经了解了如何使用类型提示（type hint）及其潜在好处，那么在使用时保持审慎思考就很重要了。以下是一些需要牢记的最佳实践（best practice）：
+
+\begin{itemize}
+\item 如果你在编写一段新代码时就从头开始使用类型标注，会拖慢你的进度。一个通用的策略是：先写出不带标注的第一个版本，再编写测试，然后在最能发挥价值的地方添加类型信息。
+\item 类型提示在代码库的边界处最为重要，例如你提供的、有许多调用方（因而也有许多其他人）所依赖的 API。类型提示与测试（test）（参见 Item 108：在 \texttt{TestCase} 子类中验证相关行为）和警告（warning）（参见 Item 123：考虑用警告来重构和迁移用法）相互补充，以确保你的 API 调用方不会因你的改动而感到意外或被破坏。
+\item 将类型提示应用于代码库中最复杂、最容易出错、但又不属于 API 的部分，可能会很有用。然而，追求类型标注 100\% 的覆盖率或许并不值得，因为你很快就会遇到收益递减（diminishing returns）。
+\item 如果可能，你应当将静态分析纳入你的自动化构建（build）和测试系统的组成部分，以确保对代码库的每一次提交都经过错误审查。此外，类型检查所使用的配置（configuration）应当维护在代码仓库（repository）中，以确保所有与你协作的人都在使用相同的规则。
+\item 在往代码中添加类型信息时，逐步运行类型检查器（type checker）很重要。如果不这样做，你可能几乎把类型提示撒得到处都是，却突然被类型检查工具抛出的一大堆错误迎面击中，这会令人气馁，并让你想要彻底放弃类型提示。
+\end{itemize}
+
+最后，需要承认的是，在许多情况下，你可能根本不需要或不愿意使用类型标注。对于中小型程序、临时（ad hoc）代码、遗留（legacy）代码库以及原型（prototype），类型提示所需付出的努力可能远超其价值。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 拥有特殊的语法和 \texttt{typing} 内置模块，用于为变量、字段、函数和方法标注类型信息。
+\item 静态类型检查器（static type checker）可以利用这些类型信息，帮助你避免许多原本会在运行时发生的常见 Bug。
+\item 在程序中采用类型、在 API 中使用它们，并确保它们不会妨碍你的生产力（productivity），这其中有各种各样的最佳实践（best practice）。
+\end{itemize}
+
+\section{Item 125: 打包 Python 程序时优先选用开源项目，而非 zipimport 与 zipapp}
+
+想象你用 \texttt{flask} 开源项目完成了用 Python 构建的 Web 应用，现在要把它交付到生产环境给真实用户使用（背景参见 Item 120（"考虑用模块级代码配置部署环境"））。对此有多种选择，可以使用包管理器（参见 Item 116（"了解从何处获取社区构建的模块"））。不过，往往更简单的方式是，直接把源代码和依赖复制到某台服务器（或某个容器镜像）里。
+
+为此，我把自己的应用及其所有相关模块都归集到一个目录中——类似 \texttt{pip} 等工具（参见 Item 117（"使用虚拟环境实现隔离且可复现的依赖"））所创建的 \texttt{site-packages} 目录：
+
+\begin{codebox}[python]
+$ ls flask_deps
+Jinja2-3.1.3.dist-info
+MarkupSafe-2.1.5.dist-info
+blinker
+blinker-1.7.0.dist-info
+click
+click-8.1.7.dist-info
+flask
+flask-3.0.2.dist-info
+itsdangerous
+itsdangerous-2.1.2.dist-info
+jinja2
+markupsafe
+myapp.py
+werkzeug
+werkzeug-3.0.1.dist-info
+\end{codebox}
+
+这些依赖包含 330 多个文件、逾 56,000 行源代码，未压缩体积达 5.1 MB。把这许多相对较小的文件复制到另一台服务器会慢得令人头疼。此类传输还可能意外改变文件权限等重要细节。过去，一个常见的规避这些隐患的做法是：在部署前把代码库归档成 zip 文件。
+
+为了让这类归档更易使用，Python 提供了 \texttt{zipimport} 内置模块。它让程序能够从出现在 \texttt{PYTHONPATH} 环境变量或 \texttt{sys.path} 列表中的 zip 文件里即时解压并加载。这里我把 \texttt{flask\_deps} 目录创建成一个 zip 归档，然后验证直接从 zip 文件执行时它工作正常：
+
+\begin{codebox}[python]
+$ cd flask_deps
+$ zip -r ../flask_deps.zip *
+$ cd ..
+$ PYTHONPATH=flask_deps.zip python3 -m flask --app=myapp routes
+Endpoint     Methods  Rule
+-----------  -------  -----------------------
+hello_world  GET      /
+static       GET      /static/<path:filename>
+\end{codebox}
+
+你大概会以为，从 zip 文件加载 Python 模块会因为解压的 CPU 开销而带来性能损失。这里我测量了从 zip 归档加载时的启动耗时：
+
+\begin{codebox}[python]
+$ time PYTHONPATH=flask_deps.zip python3 -m flask --app=myapp
+routes
+...
+real    0m0.123s
+user    0m0.097s
+sys     0m0.022s
+\end{codebox}
+
+下面我测量从磁盘上的普通文件加载时的启动耗时：
+
+\begin{codebox}[python]
+$ time PYTHONPATH=flask_deps python3 -m flask --app=myapp
+routes
+Endpoint     Methods  Rule
+-----------  -------  -----------------------
+hello_world  GET      /
+static       GET      /static/<path:filename>
+real    0m0.126s
+user    0m0.098s
+sys     0m0.023s
+\end{codebox}
+
+两者性能几乎一致。原因主要有两点。第一，与现代计算机的 I/O 能力和内存带宽相比，其处理能力极为充裕，因此额外解压带来的变慢往往可以忽略。第二，庞大的文件系统缓存与 SSD（solid-state drive，固态硬盘）性能实际上能掩盖相对少量数据的 I/O 延迟（细节参见 Item 97（"依靠预编译字节码与文件系统缓存提升启动速度"））。尽管 \texttt{flask\_deps.zip} 文件为 1.6 MB，而未压缩目录体积为 5.1 MB，性能差异实际上为零。
+
+一个可能的结论是：你应当总把 Python 程序压缩进 zip 文件，因为它看起来毫无坏处。Python 甚至为此提供了 \texttt{zipapp} 内置模块，用于快速归档整个应用。这里我用这个工具为我的 Web 应用创建一个压缩的单文件可执行程序（带 \texttt{.pyz} 后缀），便于复制和交互：
+
+\begin{codebox}[python]
+$ python -m zipapp flask_deps -m "flask.__main__:main" -p
+''/usr/bin/env python3' -c
+$ ./flask_deps.pyz --app myapp routes
+Endpoint     Methods  Rule
+-----------  -------  -----------------------
+hello_world  GET      /
+static       GET      /static/<path:filename>
+\end{codebox}
+
+遗憾的是，从 zip 文件执行 Python 代码会让真正的程序在两个方面出错：数据文件访问与扩展模块。作为第一个问题的例子，这里我创建了 Django Web 框架的 zip 归档，并尝试运行依赖它的一个 Web 应用：
+
+\begin{codebox}[python]
+$ python3 -m compileall django
+$ zip -r django.zip Django-5.0.3.dist-info django
+$ rm -R Django-5.0.3.dist-info django
+$ PYTHONPATH=django.zip python3 django_project/manage.py check
+Traceback (most recent call last):
+...
+OSError: No translation files found for default language en-us.
+\end{codebox}
+
+这之所以失败，是因为 Django 在源代码文件旁边寻找翻译数据文件。在下面的 Django 代码摘录中，\texttt{localedir} 变量的值为 \texttt{".../django.zip/django/conf/locale"}，而这不是文件系统中的某个目录。当该路径被传给 \texttt{gettext} 模块以加载翻译时，Django 库代码找不到这些文件，从而抛出上面所示的 \texttt{OSError} 异常：
+
+\begin{codebox}[python]
+# trans_real.py
+# Copyright (c) Django Software Foundation and
+# individual contributors. All rights reserved.
+class DjangoTranslation(gettext_module.GNUTranslations):
+    ...
+    def _init_translation_catalog(self):
+         settingsfile = \
+    sys.modules[settings.__module__].__file__
+        localedir = os.path.join(
+            os.path.dirname(settingsfile),
+            "locale",
+        )
+        translation = self._new_gnu_trans(localedir)
+        self.merge(translation)
+    ...
+\end{codebox}
+
+Python 提供了 \texttt{pkgutil} 内置模块来解决此问题。它会智能地检查模块，判断如何正确访问其数据资源，即便这些资源位于 zip 归档中，或需要自定义模块加载器。这里我用 \texttt{pkgutil} 加载 Django 因 zip 归档而找不到的那个翻译文件：
+
+\begin{codebox}[python]
+# django_pkgutil.py
+import pkgutil
+data = pkgutil.get_data(
+    "django.conf.locale",
+    "en/LC_MESSAGES/django.po",
+)
+print(data.decode("utf-8"))
+>>>
+# This file is distributed under the same license as the Django
+' package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Django\n"
+"Report-Msgid-Bugs-To: \n"
+...
+\end{codebox}
+
+真正使用 \texttt{pkgutil} 的项目很少；即便是像 Django 这样极为流行的项目也不使用它。Python 程序最常见的是以磁盘上的文件、保留原始目录结构的方式执行。相比之下，其他语言会把程序编译成可执行文件，放进远离代码的独立构建产物目录。这会让程序员假定自己无法访问源代码树，需要更显式地处理数据依赖。然而对 Python 代码而言，默认假设是代码就在附近，因此源代码树中的数据文件也必定在附近。不要指望常见包在被从 zip 归档中导入时还能正常工作。
+
+第二个问题是，由于操作系统的限制，你无法从 zip 归档中导入原生扩展模块（参见 Item 96（"考虑使用扩展模块以最大化性能与易用性"））。这里我展示它在 NumPy 包上是如何出错的：
+
+\begin{codebox}[python]
+$ zip -r ./numpy.zip numpy numpy-1.26.4.dist-info
+$ rm -R numpy numpy-1.26.4.dist-info
+$ PYTHONPATH=numpy.zip python -c 'import numpy'
+Traceback (most recent call last):
+...
+ModuleNotFoundError: No module named
+'numpy.core._multiarray_umath'
+During handling of the above exception, another exception
+' occurred:
+Traceback (most recent call last):
+...
+ImportError:
+IMPORTANT: PLEASE READ THIS FOR ADVICE ON HOW TO SOLVE THIS
+' ISSUE!
+Importing the numpy C-extensions failed. This error can happen for
+many reasons, often due to issues with your setup or how NumPy was
+installed.
+...
+\end{codebox}
+
+扩展模块极其有价值且流行，因为它们能帮助 Python 在 CPU 密集型任务中跑得更快（参见 Item 96（"考虑使用扩展模块以最大化性能与易用性"））。这最终成了 \texttt{zipimport} 与 \texttt{zipapps} 两者最大的致命短板。
+
+好在 Python 社区已经构建出多种更擅长部署 Python 应用的开源方案。Pex 工具（\texttt{https://github.com/pex-tool/pex}）及其衍生项目 Shiv（\texttt{https://github.com/linkedin/shiv}）提供了与 \texttt{zipapp} 类似的功能，但这些工具会自动规避数据文件与原生模块的问题。例如，这里我用 Pex 为前面那个同样的 Django Web 应用创建一个单文件可执行文件——而这个是真的能用：
+
+\begin{codebox}[python]
+$ pip install -e django_project
+$ pex django_project -o myapp.pex
+$ ./django_project.pex -m manage check
+System check identified no issues (0 silenced).
+\end{codebox}
+
+另一选择是 PyInstaller（\texttt{https://pyinstaller.org}），它做得更彻底：把 Python 可执行文件本身也打包进来，于是用户系统上无需安装任何其他东西就能运行应用。无论你决定走哪条路，务必仔细阅读文档，并实际验证它与你需要使用的模块及其对执行环境所做的假设相互兼容。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 能够直接从 zip 归档加载模块，这让把整个应用作为单文件部署变得更容易。
+\item 许多常见的开源 Python 包在被从 zip 归档导入时会出错，原因在于它们依赖数据文件与扩展模块。
+\item 社区已经构建出 Python 内置 \texttt{zipapp} 模块的替代方案，例如 Pex，它们能提供 zip 归档的部署好处，却没有那些弊端。
+\end{itemize}

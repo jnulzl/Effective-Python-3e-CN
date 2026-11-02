@@ -1,0 +1,1435 @@
+当你实现处理可观数量数据的 Python 程序时，常常会遇到由代码的算法复杂度（algorithmic complexity）引起的性能下降。例如，你原本预期会随输入数据规模线性扩展的程序，实际上可能呈二次方增长，从而在生产中引发问题。所幸，Python 包含了许多标准数据结构与算法的优化实现，能助你以最小的代价取得高性能。
+
+类似地，Python 为处理程序中频繁出现的常见任务，提供了内置的数据类型与辅助函数：操作日期、时间与时区；在处理货币数值时保持精度并控制舍入行为；以及在软件随时间演进的过程中，为用户保存与恢复程序状态。编写代码来处理这些情况既繁琐又难以做对。语言中内建了久经考验的实现来处理它们，实乃幸事。
+
+\section{Item 100: 使用 key 参数按复杂条件排序}
+
+\texttt{list}（列表）内置类型提供了一个 \texttt{sort} 方法，可以按照多种条件对 \texttt{list} 实例中的元素进行排序。（不要将 \texttt{sort} 方法与 \texttt{sorted} 混淆；参见 Item 101（"了解 \texttt{sort} 与 \texttt{sorted} 的区别"）。）默认情况下，\texttt{sort} 会按照元素的自然升序排列列表内容。例如，下面我把一个整数列表从小到大排序：
+
+\begin{codebox}[python]
+numbers = [93, 86, 11, 68, 70]
+numbers.sort()
+print(numbers)
+>>>
+[11, 68, 70, 86, 93]
+\end{codebox}
+
+\texttt{sort} 方法适用于几乎所有具有自然排序顺序的内置（built-in）类型（字符串、浮点数等）。那么 \texttt{sort} 面对对象时会怎么做呢？作为示例，我在这里定义了一个类——其中包含 \texttt{\_\_repr\_\_} 方法，以便实例可被打印出来（参见 Item 12（"理解打印对象时 \texttt{repr} 与 \texttt{str} 的区别"））——用来表示在建筑工地上可能会用到的各种工具：
+
+\begin{codebox}[python]
+class Tool:
+    def __init__(self, name, weight):
+        self.name = name
+        self.weight = weight
+    def __repr__(self):
+        return f"Tool({self.name!r}, {self.weight})"
+tools = [
+    Tool("level", 3.5),
+    Tool("hammer", 1.25),
+    Tool("screwdriver", 0.5),
+    Tool("chisel", 0.25),
+]
+\end{codebox}
+
+对这种类型的对象进行排序是行不通的，因为 \texttt{sort} 方法会尝试调用该类并未定义的比较特殊方法：
+
+\begin{codebox}[python]
+tools.sort()
+>>>
+Traceback ...
+TypeError: '<' not supported between instances of 'Tool' and
+'Tool'
+\end{codebox}
+
+如果你的类应当像整数那样拥有自然排序顺序，那么你可以定义必要的特殊方法（示例参见 Item 104（"了解如何用 \texttt{heapq} 实现优先队列"），背景知识参见 Item 57（"为自定义容器类型继承 \texttt{collections.abc} 中的类"）），从而让 \texttt{sort} 无需任何额外参数就能正常工作。但更常见的情况是，你的对象可能需要支持多种排序顺序，在这种情况下，只定义单一的自然排序顺序确实说不通。
+
+对象上常常有一个你想用来排序的属性。为了支持这种用法，\texttt{sort} 方法接受一个 \texttt{key} 参数，该参数应当是一个函数（背景知识参见 Item 48（"用函数而非类来实现简单接口"））。这个 \texttt{key} 函数会接收单个参数，即正在被排序的列表中的一个元素。\texttt{key} 函数的返回值应当是一个可比较的值（即拥有自然排序顺序），用来在排序时替代该元素。
+
+这里我使用 \texttt{lambda} 关键字（背景知识参见 Item 39（"优先使用 \texttt{functools.partial} 而非 \texttt{lambda} 表达式来实现粘合函数"））来为 \texttt{key} 参数定义一个函数，使我能够按照 \texttt{name} 属性对 \texttt{Tool} 对象列表进行字母序排序：
+
+\begin{codebox}[python]
+print("Unsorted:", repr(tools))
+tools.sort(key=lambda x: x.name)
+print("\nSorted:  ", tools)
+>>>
+Unsorted: [Tool('level', 3.5), Tool('hammer', 1.25),
+'Tool('screwdriver', 0.5), Tool('chisel', 0.25)]
+Sorted:   [Tool('chisel', 0.25), Tool('hammer', 1.25),
+'Tool('level', 3.5), Tool('screwdriver', 0.5)]
+\end{codebox}
+
+我可以同样轻松地定义另一个 \texttt{lambda} 函数，按照 \texttt{weight} 属性排序，并将其作为 \texttt{key} 参数传给 \texttt{sort} 方法：
+
+\begin{codebox}[python]
+tools.sort(key=lambda x: x.weight)
+print("By weight:", tools)
+>>>
+By weight: [Tool('chisel', 0.25), Tool('screwdriver', 0.5),
+'Tool('hammer', 1.25), Tool('level', 3.5)]
+\end{codebox}
+
+在作为 \texttt{key} 参数传入的 \texttt{lambda} 函数里，你可以像我这里一样访问元素的属性、对元素进行索引（针对序列、元组和字典），或者使用任何其他有效的表达式。对于字符串这类基本类型，你甚至可能想借 \texttt{key} 函数在对值排序之前先做一番转换。例如，下面我对一个地名列表中的每个元素调用 \texttt{lower} 方法，以确保它们按字母顺序排列，同时忽略大小写（因为在字符串的自然字典序中，大写字母排在小写字母之前）：
+
+\begin{codebox}[python]
+places = ["home", "work", "New York", "Paris"]
+places.sort()
+print("Case sensitive:  ", places)
+places.sort(key=lambda x: x.lower())
+print("Case insensitive:", places)
+>>>
+Case sensitive:   ['New York', 'Paris', 'home', 'work']
+Case insensitive: ['home', 'New York', 'Paris', 'work']
+\end{codebox}
+
+有时你可能需要使用多个条件进行排序。例如，假设我有一个电动工具列表，想先按 \texttt{weight} 属性、再按 \texttt{name} 排序。我该如何实现呢？
+
+\begin{codebox}[python]
+power_tools = [
+    Tool("drill", 4),
+    Tool("circular saw", 5),
+    Tool("jackhammer", 40),
+    Tool("sander", 4),
+]
+\end{codebox}
+
+在 Python 中最简单的解决方案是使用 \texttt{tuple}（元组）类型（另一种做法参见 Item 56（"优先使用 dataclass 来创建不可变对象"））。元组是任意 Python 值的不可变序列。元组默认可比较，并且拥有自然排序顺序，这意味着它们实现了 \texttt{sort} 方法所要求的全部特殊方法，例如 \texttt{\_\_lt\_\_}。\texttt{tuple} 类型实现比较特殊方法的方式是：依次遍历元组中的每个位置，逐一比较对应的值。下面我演示当一个工具比另一个更重时，这种机制是如何运作的：
+
+\begin{codebox}[python]
+saw = (5, "circular saw")
+jackhammer = (40, "jackhammer")
+assert not (jackhammer < saw)  # 符合预期
+\end{codebox}
+
+如果被比较的两个元组中第一个位置的值相等——在本例中就是重量——那么元组比较就会转到第二个位置，依此类推：
+
+\begin{codebox}[python]
+drill = (4, "drill")
+sander = (4, "sander")
+assert drill[0] == sander[0]  # 重量相同
+assert drill[1] < sander[1]   # 字母序更小
+assert drill < sander         # 因此 drill 排在前面
+\end{codebox}
+
+你可以利用这种元组比较行为，先按重量、再按名称对电动工具列表排序。下面我定义一个 \texttt{key} 函数，它返回一个包含我想排序的两个属性的元组，且按优先级顺序排列：
+
+\begin{codebox}[python]
+power_tools.sort(key=lambda x: (x.weight, x.name))
+print(power_tools)
+>>>
+[Tool('drill', 4), Tool('sander', 4), Tool('circular saw', 5),
+'Tool('jackhammer', 40)]
+\end{codebox}
+
+让 \texttt{key} 函数返回一个元组的局限在于，所有条件的排序方向必须一致（要么全部升序，要么全部降序）。如果我给 \texttt{sort} 方法提供 \texttt{reverse} 参数，它会以相同的方式影响元组中的两个条件（注意现在 \texttt{sander} 排在了 \texttt{drill} 之前，而不是之后）：
+
+\begin{codebox}[python]
+power_tools.sort(
+    key=lambda x: (x.weight, x.name),
+    reverse=True,  # 让所有条件都降序
+)
+print(power_tools)
+>>>
+[Tool('jackhammer', 40), Tool('circular saw', 5),
+'Tool('sander', 4), Tool('drill', 4)]
+\end{codebox}
+
+对于数值类型，可以在 \texttt{key} 函数中使用一元负号（unary minus）运算符来混合不同的排序方向。这会对返回元组中的某个值取负，从而有效地反转它的排序顺序，同时不影响其他值。下面我采用这种做法，先按重量降序、再按名称升序排序（注意现在 \texttt{sander} 排在了 \texttt{drill} 之后，而不是之前）：
+
+\begin{codebox}[python]
+power_tools.sort(key=lambda x: (-x.weight, x.name))
+print(power_tools)
+>>>
+[Tool('jackhammer', 40), Tool('circular saw', 5), Tool
+'('drill', 4), Tool('sander', 4)]
+\end{codebox}
+
+遗憾的是，一元负号并非对所有类型都可用。下面我尝试通过 \texttt{reverse} 参数先按重量降序、再对 \texttt{name} 属性取负以使其保持升序，来得到相同的结果：
+
+\begin{codebox}[python]
+power_tools.sort(key=lambda x: (x.weight, -x.name),
+reverse=True)
+>>>
+Traceback ...
+TypeError: bad operand type for unary -: 'str'
+\end{codebox}
+
+对于这类情况，Python 提供了一种稳定排序（stable sort）算法。\texttt{list} 类型的 \texttt{sort} 方法在 \texttt{key} 函数返回相互相等的值时，会保留输入列表中元素的原有顺序。这意味着我可以对同一个列表多次调用 \texttt{sort}，从而把不同的条件组合到一起。下面我得到了与上面相同的"重量降序、名称升序"排序结果，但这次是通过两次独立的 \texttt{sort} 调用来实现的：
+
+\begin{codebox}[python]
+power_tools.sort(
+    key=lambda x: x.name,    # 名称升序
+)
+power_tools.sort(
+    key=lambda x: x.weight,  # 重量降序
+    reverse=True,
+)
+print(power_tools)
+>>>
+[Tool('jackhammer', 40), Tool('circular saw', 5),
+Tool('drill', 4), Tool('sander', 4)]
+\end{codebox}
+
+要理解为什么会这样，请注意第一次 \texttt{sort} 调用是如何把名称按字母顺序排列的：
+
+\begin{codebox}[python]
+power_tools.sort(key=lambda x: x.name)
+print(power_tools)
+>>>
+[Tool('circular saw', 5), Tool('drill', 4),
+'Tool('jackhammer', 40), Tool('sander', 4)]
+\end{codebox}
+
+当第二次按重量降序调用 \texttt{sort} 时，代码会发现 \texttt{sander} 和 \texttt{drill} 的重量都是 \texttt{4}。这导致 \texttt{sort} 方法把这两个元素按照它们在原列表中出现的相同顺序放入最终结果列表，从而保留了它们按名称升序的相对顺序：
+
+\begin{codebox}[python]
+power_tools.sort(
+    key=lambda x: x.weight,
+    reverse=True,
+)
+print(power_tools)
+>>>
+[Tool('jackhammer', 40), Tool('circular saw', 5),
+'Tool('drill', 4), Tool('sander', 4)]
+\end{codebox}
+
+同样的方法可以用来组合任意多种不同类型的排序条件，方向也可以任意指定。你只需确保以与期望的最终列表相反的顺序来执行排序即可。在这个例子中，我希望的排序顺序是先按重量降序、再按名称升序，因此我必须先做名称排序，再做重量排序。话虽如此，让 \texttt{key} 函数返回元组、并使用一元负号来混合排序顺序的做法更易读，需要的代码也更少。我建议只有在万不得已时才使用多次调用 \texttt{sort} 的方案。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{list} 类型的 \texttt{sort} 方法可用于按照字符串、整数、元组等内置类型的自然排序顺序重新排列列表内容。
+\item 除非对象通过特殊方法定义了自然排序顺序（这并不常见），否则 \texttt{sort} 方法对对象不起作用。
+\item \texttt{sort} 方法的 \texttt{key} 参数可用于提供一个辅助函数，该函数在排序时返回用来替代列表中每个元素的值。
+\item 让 \texttt{key} 函数返回一个元组，可以把多个排序条件组合到一起。对于支持取负的类型，可以使用一元负号运算符来反转个别条件的排序顺序。
+\item 对于不能取负的类型，你可以通过多次调用 \texttt{sort} 方法、使用不同的 \texttt{key} 函数和 \texttt{reverse} 值，并按照"最低优先级排序调用在前、最高优先级排序调用在后"的顺序，将许多排序条件组合到一起。
+\end{itemize}
+
+\section{Item 101: 了解 sort 与 sorted 的区别}
+
+在 Python 中，对数据排序最熟悉的方式是使用 \texttt{list} 类型的内置 \texttt{sort} 方法（参见 Item 100（"使用 \texttt{key} 参数按复杂条件排序"））。该方法会让数据就地排序，也就是说原列表会被修改，排序前的排列不再可用。例如，这里我对一组蝴蝶名称按字母顺序排序：
+
+\begin{codebox}[python]
+butterflies = ["Swallowtail", "Monarch", "Red Admiral"]
+print(f"Before {butterflies}")
+butterflies.sort()
+print(f"After {butterflies}")
+>>>
+Before ['Swallowtail', 'Monarch', 'Red Admiral']
+After ['Monarch', 'Red Admiral', 'Swallowtail']
+\end{codebox}
+
+在 Python 中排序数据的另一种方式是使用内置的 \texttt{sorted} 函数。该函数会对给定对象的内容排序，并以列表形式返回结果，同时原对象保持不变：
+
+\begin{codebox}[python]
+original = ["Swallowtail", "Monarch", "Red Admiral"]
+alphabetical = sorted(original)
+print(f"Original {original}")
+print(f"Sorted   {alphabetical}")
+>>>
+Original ['Swallowtail', 'Monarch', 'Red Admiral']
+Sorted   ['Monarch', 'Red Admiral', 'Swallowtail']
+\end{codebox}
+
+内置的 \texttt{sorted} 函数可用于任意可迭代对象（参见 Item 21（"迭代参数时保持防御性"）），包括元组、字典和集合：
+
+\begin{codebox}[python]
+patterns = {"solid", "spotted", "cells"}
+print(sorted(patterns))
+>>>
+['cells', 'solid', 'spotted']
+\end{codebox}
+
+它还支持 \texttt{reverse} 和 \texttt{key} 参数，与内置的 \texttt{sort} 函数一样（参见 Item 100（"使用 \texttt{key} 参数按复杂条件排序"））：
+
+\begin{codebox}[python]
+legs = {"insects": 6, "spiders": 8, "lizards": 4}
+sorted_legs = sorted(
+    legs,
+    key=lambda x: legs[x],
+    reverse=True,
+)
+print(sorted_legs)
+>>>
+['spiders', 'insects', 'lizards']
+\end{codebox}
+
+相比 \texttt{sorted}，使用 \texttt{sort} 有两个好处。第一，\texttt{sort} 就地修改列表，这意味着你的程序在排序期间和排序之后的内存占用保持不变。另一方面，\texttt{sorted} 需要复制可迭代对象的内容来生成一个排好序的列表，这可能使你的程序内存需求翻倍。第二，\texttt{sort} 可以快很多，因为它总体上做的事更少。结果列表已经存在，无需分配或调整大小。迭代只需在一个列表上进行，而不是在任意可迭代对象上。如果数据已经部分有序，还可以完全避免索引重排。
+
+然而，使用 \texttt{sorted} 而非 \texttt{sort} 也有两个主要好处。第一，原对象不被改动，确保你不会无意中修改传给函数的参数，从而引发令人困惑的 bug（背景见 Item 30（"了解函数参数可能被改动"）与 Item 56（"优先使用 dataclasses 创建不可变对象"））。第二，\texttt{sorted} 适用于任意类型的迭代器，而不仅仅是列表，这意味着你的函数可以依赖鸭子类型，对所接受的类型更灵活（示例见 Item 25（"依赖字典插入顺序时务必谨慎"））。
+
+可以说，\texttt{sorted} 比 \texttt{sort} 更具 Pythonic 风格，因为它提供了额外的灵活性，并且在如何产生结果上更加明确。具体选择哪一个，取决于具体情境以及你想达成的目标。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{sort} 能以最小的内存开销获得最高性能，但要求目标列表就地修改。
+\item \texttt{sorted} 可以处理所有类型的迭代器和集合作为输入，并且不会无意中改动数据。
+\end{itemize}
+
+\section{Item 102: 考虑用 bisect 在已排序序列中搜索}
+
+在内存中持有一份庞大的已排序列表数据，然后想要对其进行搜索，这种情况很常见。例如，你可能加载了一本英语词典用于拼写检查，或者你有一份带日期的金融交易记录清单，需要审计其正确性。
+
+无论你的具体程序需要处理什么数据，当你调用 \texttt{index} 方法时，在列表中搜索某个特定值所需的时间与列表长度成正比，即线性时间：
+
+\begin{codebox}[python]
+data = list(range(10**5))
+index = data.index(91234)
+assert index == 91234
+\end{codebox}
+
+如果你不确定要搜索的确切值是否在列表中，可能想要找到等于或超过目标值的最接近的索引。最简单的做法是线性扫描列表，将每一项与目标值进行比较：
+
+\begin{codebox}[python]
+def find_closest(sequence, goal):
+    for index, value in enumerate(sequence):
+        if goal < value:
+            return index
+    raise ValueError(f"{goal} is out of bounds")
+index = find_closest(data, 91234.56)
+assert index == 91235
+\end{codebox}
+
+Python 内置的 \texttt{bisect} 模块为在有序列表上进行这类搜索提供了更好的办法。你可以使用 \texttt{bisect\_left} 函数对任何有序的项序列高效地执行二分查找。它返回的索引，要么是该项在列表中已存在的位置，要么是你想插入该项以保持列表有序的位置：
+
+\begin{codebox}[python]
+from bisect import bisect_left
+index = bisect_left(data, 91234)     # Exact match
+assert index == 91234
+index = bisect_left(data, 91234.56)  # Closest match
+assert index == 91235
+\end{codebox}
+
+\texttt{bisect} 模块所用二分查找算法的复杂度是对数级的，即 $O(\log n)$。这意味着在一个长度为 100 万的列表中用 \texttt{bisect} 搜索，耗时与用 \texttt{list.index} 方法在长度为 20 的列表中做线性搜索大致相同（\texttt{math.log2(10**6) == 19.93...}）。所以 \texttt{bisect} 快得多！
+
+我可以用内置的 \texttt{timeit} 模块运行一个微基准测试，来验证上面这个例子中的速度提升（详细内容见 Item 93（"使用 \texttt{timeit} 微基准测试优化性能关键代码"））：
+
+\begin{codebox}[python]
+import random
+import timeit
+size = 10**5
+iterations = 1000
+data = list(range(size))
+to_lookup = [ random.randint(0, size)
+for _ in range(iterations)]
+def run_linear(data, to_lookup):
+    for index in to_lookup:
+        data.index(index)
+def run_bisect(data, to_lookup):
+    for index in to_lookup:
+        bisect_left(data, index)
+baseline = (
+    timeit.timeit(
+        stmt="run_linear(data, to_lookup)",
+        globals=globals(),
+        number=10,
+    )
+    / 10
+)
+print(f"Linear search takes {baseline:.6f}s")
+comparison = (
+    timeit.timeit(
+        stmt="run_bisect(data, to_lookup)",
+        globals=globals(),
+        number=10,
+    )
+    / 10
+)
+print(f"Bisect search takes {comparison:.6f}s")
+slowdown = 1 + ((baseline - comparison) / comparison)
+print(f"{slowdown:.1f}x slower")
+>>>
+Linear search takes 0.317685s
+Bisect search takes 0.000197s
+1610.1x time
+\end{codebox}
+
+\texttt{bisect} 最棒的一点是它不局限于 \texttt{list} 类型；你可以用在任何表现得像序列的 Python 对象上（做法见 Item 57（"为自定义容器类型继承 \texttt{collections.abc} 中的类"）），只要其中所含的值具有自然排序（背景见 Item 104（"了解如何用 \texttt{heapq} 实现优先队列"））。该模块还为更高级的场景提供了额外功能（参见 \texttt{https://docs.python.org/3/library/bisect.html}）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 使用 \texttt{index} 方法或带简单比较的 \texttt{for} 循环，在列表中搜索已排序数据需要线性时间。
+\item 内置的 \texttt{bisect} 模块的 \texttt{bisect\_left} 函数搜索有序列表中的值只需对数时间，可能比其他方法快好几个数量级。
+\end{itemize}
+
+\section{Item 103: 优先使用 deque 实现生产者—消费者队列}
+
+在编写程序时，一个常见需求是先进先出（FIFO）的队列（queue），也称为生产者—消费者（producer–consumer）队列。当一个函数收集待处理的值，而另一个函数按接收顺序处理这些值时，就会用到 FIFO 队列。开发者常常会求助于 Python 的内置（built-in）\texttt{list} 类型（即列表）来充当 FIFO 队列。
+
+例如，假设我正在编写一个程序，用于处理传入的邮件以供长期归档，并且它使用 \texttt{list} 作为生产者—消费者队列。这里我定义一个类来表示这些邮件：
+
+\begin{codebox}[python]
+class Email:
+    def __init__(self, sender, receiver, message):
+        self.sender = sender
+        self.receiver = receiver
+        self.message = message
+    ...
+\end{codebox}
+
+我还定义了一个用于接收单封邮件的占位函数，大概是从套接字（socket）、文件系统或其他某种 I/O 系统接收。这个函数的实现并不重要；重要的是它的接口（interface）：它会返回一个 \texttt{Email} 实例，或者抛出一个 \texttt{NoEmailError} 异常（exception）（关于这一约定的更多内容，参见 Item 32（「优先抛出异常而非返回 \texttt{None}」））：
+
+\begin{codebox}[python]
+class NoEmailError(Exception):
+    pass
+def try_receive_email():
+    # 返回 Email 实例或抛出 NoEmailError 异常
+    ...
+\end{codebox}
+
+生产（produce）函数接收邮件，并将它们入队（enqueue），以便稍后消费（consume）。这个函数使用 \texttt{list} 的 \texttt{append} 方法，把新消息添加到队列末尾，使它们在所有先前收到的消息之后被处理：
+
+\begin{codebox}[python]
+def produce_emails(queue):
+    while True:
+        try:
+            email = try_receive_email()
+        except NoEmailError:
+            return
+        else:
+            queue.append(email)  # 生产者
+\end{codebox}
+
+消费（consume）函数才是对邮件做有用处理的地方。这个函数对队列调用 \texttt{pop(0)}，它会从列表中移除最前面的那一项，并将其返回给调用者。通过总是从队列开头处理各项，消费者确保了各项按接收顺序被处理：
+
+\begin{codebox}[python]
+def consume_one_email(queue):
+    if not queue:
+        return
+    email = queue.pop(0)  # 消费者
+    # 为长期归档建立索引
+    ...
+\end{codebox}
+
+最后，我需要一个循环函数来把各个部分连接起来。这个函数在生产（produce）和消费（consume）之间交替进行，直到 \texttt{keep\_running} 函数返回 \texttt{False} 为止（关于如何并发地执行此操作，参见 Item 75（「使用协程实现高并发 I/O」））：
+
+\begin{codebox}[python]
+def loop(queue, keep_running):
+    while keep_running():
+        produce_emails(queue)
+        consume_one_email(queue)
+def my_end_func():
+    ...
+loop([], my_end_func)
+\end{codebox}
+
+为什么不在 \texttt{produce\_emails} 中，每当 \texttt{try\_receive\_email} 返回一封 \texttt{Email} 对象时就立即处理它呢？这归结为延迟（latency）与吞吐量（throughput）之间的权衡。在使用生产者—消费者队列时，你通常希望尽可能降低接收新项的延迟，以便尽快把它们收集起来。消费者随后可以以稳定的节奏处理积压（backlog）的各项——在本例中每个循环处理一项——这样就能提供稳定的性能表现和一致的吞吐量，代价是端到端的延迟（相关的优秀实践，参见 Item 70（「使用 \texttt{Queue} 在线程间协调工作」））。
+
+像这样使用 \texttt{list} 作为生产者—消费者队列，在一定规模内可以正常工作，但随着基数（cardinality，即列表中的项数）增加，\texttt{list} 类型的性能会呈超线性（superlinearly）下降。为了分析把 \texttt{list} 当作 FIFO 队列使用的性能，我可以用 \texttt{timeit} 内置模块（built-in module）运行一些微基准测试（microbenchmark）（详见 Item 93（「使用 \texttt{timeit} 微基准测试优化性能关键代码」））。这里我定义一个基准，用于测试使用 \texttt{list} 的 \texttt{append} 方法向队列添加新项时的性能（与生产者函数的用法一致）：
+
+\begin{codebox}[python]
+import timeit
+def list_append_benchmark(count):
+    def run(queue):
+        for i in range(count):
+            queue.append(i)
+    return timeit.timeit(
+        setup="queue = []",
+        stmt="run(queue)",
+        globals=locals(),
+        number=1,
+    )
+\end{codebox}
+
+用不同的基数规模运行这个基准函数，我就可以比较它的性能与数据大小之间的关系：
+
+\begin{codebox}[python]
+for i in range(1, 6):
+    count = i * 1_000_000
+    delay = list_append_benchmark(count)
+    print(f"Count {count:>5,} takes: {delay*1e3:>6.2f}ms")
+>>>
+Count 1,000,000 takes:  13.23ms
+Count 2,000,000 takes:  26.50ms
+Count 3,000,000 takes:  39.06ms
+Count 4,000,000 takes:  51.98ms
+Count 5,000,000 takes:  65.19ms
+\end{codebox}
+
+这表明 \texttt{append} 方法对于 \texttt{list} 类型来说耗时大致恒定（约 $O(1)$），而入队（enqueue）的总时间随着数据规模增大而线性（linearly）扩展。\texttt{list} 类型在添加新项时需要暗中增大其容量，这会带来一些开销，但开销相当低，并且会在对 \texttt{append} 的反复调用中被摊还（amortized）。
+
+这里我定义一个类似的基准，用于测试从队列开头移除各项的 \texttt{pop(0)} 调用（与消费者函数的用法一致）：
+
+\begin{codebox}[python]
+def list_pop_benchmark(count):
+    def prepare():
+        return list(range(count))
+    def run(queue):
+        while queue:
+            queue.pop(0)
+    return timeit.timeit(
+        setup="queue = prepare()",
+        stmt="run(queue)",
+        globals=locals(),
+        number=1,
+    )
+\end{codebox}
+
+我可以类似地用不同大小的队列运行这个基准，以观察基数如何影响性能：
+
+\begin{codebox}[python]
+for i in range(1, 6):
+    count = i * 10_000
+    delay = list_pop_benchmark(count)
+    print(f"Count {count:>5,} takes: {delay*1e3:>6.2f}ms")
+>>>
+Count 10,000 takes:   4.98ms
+Count 20,000 takes:  22.21ms
+Count 30,000 takes:  60.04ms
+Count 40,000 takes: 109.96ms
+Count 50,000 takes: 176.92ms
+\end{codebox}
+
+令人惊讶的是，这表明用 \texttt{pop(0)} 从列表出队（dequeue）各项的总时间，随着队列长度增加呈二次方（约 $O(n^2)$）扩展。这是因为 \texttt{pop(0)} 需要把列表中的每一项都向后移动一个索引，实际上相当于重新赋值整个列表的内容。我需要对列表中的每一项都调用 \texttt{pop(0)}，因此消费完整个队列最终要做大约 \texttt{len(queue) * len(queue)} 次操作。这种规模扩展方式不可行。
+
+Python 通过 \texttt{collections} 内置模块提供的 \texttt{deque} 类来解决这个问题。\texttt{deque} 是一个双端队列（double-ended queue）实现。它提供了在头部或尾部插入或移除各项的常数时间（约 $O(1)$）操作。这使它非常适合 FIFO 队列。
+
+要使用 \texttt{deque} 类，\texttt{produce\_emails} 中对 \texttt{append} 的调用可以保持与用列表作为队列时完全相同。\texttt{consume\_one\_email} 中的 \texttt{list.pop} 方法调用必须改为调用 \texttt{deque.popleft} 方法，且不带任何参数。而 \texttt{loop} 方法必须以一个 \texttt{deque} 实例而非列表来调用。其余一切都保持不变。这里我重新定义了受影响的那个函数，以使用新方法，并再次运行 \texttt{loop}：
+
+\begin{codebox}[python]
+import collections
+def consume_one_email(queue):
+    if not queue:
+        return
+    email = queue.popleft()  # 消费者
+    # 处理邮件消息
+    ...
+def my_end_func():
+    ...
+loop(collections.deque(), my_end_func)
+\end{codebox}
+
+我可以运行另一个版本的基准，以验证 \texttt{append} 的性能（与生产者函数的用法一致）大致保持不变（相差一个常数因子）：
+
+\begin{codebox}[python]
+def deque_append_benchmark(count):
+    def prepare():
+        return collections.deque()
+    def run(queue):
+        for i in range(count):
+            queue.append(i)
+    return timeit.timeit(
+        setup="queue = prepare()",
+        stmt="run(queue)",
+        globals=locals(),
+        number=1,
+    )
+for i in range(1, 6):
+    count = i * 100_000
+    delay = deque_append_benchmark(count)
+    print(f"Count {count:>5,} takes: {delay*1e3:>6.2f}ms")
+>>>
+Count 100,000 takes:   1.68ms
+Count 200,000 takes:   3.16ms
+Count 300,000 takes:   5.05ms
+Count 400,000 takes:   6.81ms
+Count 500,000 takes:   8.43ms
+\end{codebox}
+
+我还可以对调用 \texttt{popleft} 的性能进行基准测试，以模拟消费者函数对 \texttt{deque} 的用法：
+
+\begin{codebox}[python]
+def dequeue_popleft_benchmark(count):
+    def prepare():
+        return collections.deque(range(count))
+    def run(queue):
+        while queue:
+            queue.popleft()
+    return timeit.timeit(
+        setup="queue = prepare()",
+        stmt="run(queue)",
+        globals=locals(),
+        number=1,
+    )
+for i in range(1, 6):
+    count = i * 100_000
+    delay = dequeue_popleft_benchmark(count)
+    print(f"Count {count:>5,} takes: {delay*1e3:>6.2f}ms")
+>>>
+Count 100,000 takes:   1.67ms
+Count 200,000 takes:   3.59ms
+Count 300,000 takes:   5.65ms
+Count 400,000 takes:   7.50ms
+Count 500,000 takes:   9.58ms
+\end{codebox}
+
+\texttt{popleft} 的用法呈线性（约 $O(n)$）扩展，与我之前测得的 \texttt{pop(0)} 的超线性（superlinear）行为形成鲜明对比——太好了！如果你清楚程序的性能关键依赖于生产者—消费者队列的速度，那么 \texttt{deque} 是一个极佳的选择。如果你不确定，那么你应该对程序进行性能剖析（instrument）来查明（参见 Item 92（「优化前先做性能剖析」））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{list} 类型可以用作 FIFO 队列：让生产者调用 \texttt{append} 添加各项，让消费者调用 \texttt{pop(0)} 接收各项。然而，这可能带来问题，因为 \texttt{pop(0)} 的性能会随着队列长度增加呈超线性下降。
+\item 来自 \texttt{collections} 内置模块的 \texttt{deque} 类，其 \texttt{append} 和 \texttt{popleft} 操作无论长度如何都只需常数时间（约 $O(1)$），这使它非常适合 FIFO 队列。
+\end{itemize}
+
+\section{Item 104: 了解如何用 heapq 实现优先队列}
+
+Python 其他队列实现（参见 Item 103（「优先用 \texttt{deque}（双端队列）实现生产者—消费者队列」）与 Item 70（「用 \texttt{Queue} 在线程间协调工作」））的一个局限在于，它们都是先进先出（FIFO，first-in, first-out）队列：其中的内容按照被接收的顺序排序。在很多情况下，我们需要让程序按照相对重要性的顺序来处理条目，而非按照接收顺序。要实现这一点，优先队列（priority queue）才是正确的工具。
+
+例如，假设我在编写一个程序来管理从图书馆借出的书。有人不断借新书，有人按时归还所借的书，还有人需要被提醒归还逾期的书。这里我定义一个类来表示一本已被借出的书：
+
+\begin{codebox}[python]
+class Book:
+    def __init__(self, title, due_date):
+        self.title = title
+        self.due_date = due_date
+\end{codebox}
+
+我需要一个系统，能在每本书超过应还日期时发出提醒消息。遗憾的是，我无法为此使用 FIFO 队列，因为每本书被允许借出的时长会因其新颖度、热门程度以及其他因素而变化。例如，今天借出的书，其应还日期可能晚于明天借出的书。这里我通过使用一个标准 list（列表），并在每次新增一个 \texttt{Book} 对象时，都按照 \texttt{due\_date} 属性对它排序，来实现这一行为：
+
+\begin{codebox}[python]
+def add_book(queue, book):
+    queue.append(book)
+    queue.sort(key=lambda x: x.due_date, reverse=True)
+queue = []
+add_book(queue, Book("Don Quixote", "2019-06-07"))
+add_book(queue, Book("Frankenstein", "2019-06-05"))
+add_book(queue, Book("Les Misérables", "2019-06-08"))
+add_book(queue, Book("War and Peace", "2019-06-03"))
+\end{codebox}
+
+如果我假定这个借书队列始终处于已排序状态，那么要检查逾期书籍，只需查看列表的最后一个元素即可。这里我定义一个函数，用于在存在逾期书时返回下一本逾期书，并将其从队列中移除：
+
+\begin{codebox}[python]
+class NoOverdueBooks(Exception):
+    pass
+def next_overdue_book(queue, now):
+    if queue:
+        book = queue[-1]
+        if book.due_date < now:
+            queue.pop()
+            return book
+    raise NoOverdueBooks
+\end{codebox}
+
+我可以反复调用这个函数，从而按从最逾期到最不逾期的顺序，取出逾期书来提醒读者：
+
+\begin{codebox}[python]
+now = "2019-06-10"
+found = next_overdue_book(queue, now)
+print(found.due_date, found.title)
+found = next_overdue_book(queue, now)
+print(found.due_date, found.title)
+>>>
+2019-06-03 War and Peace
+2019-06-05 Frankenstein
+\end{codebox}
+
+如果一本书在应还日期之前被归还，我可以通过把它从列表中移除，来取消已排定的提醒消息：
+
+\begin{codebox}[python]
+def return_book(queue, book):
+    queue.remove(book)
+queue = []
+book = Book("Treasure Island", "2019-06-04")
+add_book(queue, book)
+print("Before return:", [x.title for x in queue])
+return_book(queue, book)
+print("After return: ", [x.title for x in queue])
+>>>
+Before return: ['Treasure Island']
+After return:  []
+\end{codebox}
+
+而且我可以确认，当所有书都被归还后，\texttt{return\_book} 函数会抛出正确的异常（关于这一约定，参见 Item 32（「优先抛出异常而非返回 \texttt{None}」））：
+
+\begin{codebox}[python]
+try:
+    next_overdue_book(queue, now)
+except NoOverdueBooks:
+    pass          # 预期如此
+else:
+    assert False  # 不会发生
+\end{codebox}
+
+然而，这个解决方案的计算复杂度并不理想。尽管检查并移除一本逾期书的代价是常数级的，但每当我添加一本书，都要重新付出对整个列表排序的代价。如果我要添加 \texttt{len(queue)} 本书，而排序它们的代价大约是 \texttt{len(queue)} \texttt{*} \texttt{math.log(len(queue))}，那么添加这些书所花费的时间就会以超线性的速度增长（\texttt{len(queue)} \texttt{*} \texttt{len(queue)} \texttt{*} \texttt{math.log(len(queue))}）。
+
+这里我定义一个微基准测试（microbenchmark），借助内置的 \texttt{timeit} 模块（参见 Item 93（「用 \texttt{timeit} 微基准测试优化性能关键代码」）以了解细节）来实测这一性能表现：
+
+\begin{codebox}[python]
+import random
+import timeit
+def list_overdue_benchmark(count):
+    def prepare():
+        to_add = list(range(count))
+        random.shuffle(to_add)
+        return [], to_add
+    def run(queue, to_add):
+        for i in to_add:
+            queue.append(i)
+            queue.sort(reverse=True)
+        while queue:
+            queue.pop()
+    return timeit.timeit(
+        setup="queue, to_add = prepare()",
+        stmt="run(queue, to_add)",
+        globals=locals(),
+        number=1,
+    )
+\end{codebox}
+
+我可以验证：随着所借书籍数量的增加，从这个队列中添加和移除书籍的运行时间以超线性的方式增长：
+
+\begin{codebox}[python]
+for i in range(1, 6):
+    count = i * 1_000
+    delay = list_overdue_benchmark(count)
+    print(f"Count {count:>5,} takes: {delay*1e3:>6.2f}ms")
+>>>
+Count 1,000 takes:   1.74ms
+Count 2,000 takes:   5.87ms
+Count 3,000 takes:  11.12ms
+Count 4,000 takes:  19.80ms
+Count 5,000 takes:  31.02ms
+\end{codebox}
+
+当一本书在应还日期之前被归还时，我需要进行一次线性扫描，以便在队列中找到这本书并将其移除。移除一本书会导致列表中其后所有的条目都向后移动一个索引，这一代价很高，并且同样以超线性的方式增长。这里我再定义另一个微基准测试，用来测试用这个函数归还书籍的性能：
+
+\begin{codebox}[python]
+def list_return_benchmark(count):
+    def prepare():
+        queue = list(range(count))
+        random.shuffle(queue)
+        to_return = list(range(count))
+        random.shuffle(to_return)
+        return queue, to_return
+    def run(queue, to_return):
+        for i in to_return:
+            queue.remove(i)
+    return timeit.timeit(
+        setup="queue, to_return = prepare()",
+        stmt="run(queue, to_return)",
+        globals=locals(),
+        number=1,
+    )
+\end{codebox}
+
+同样地，我可以验证，随着书籍数量的增加，性能确实以超线性的方式下降：
+
+\begin{codebox}[python]
+for i in range(1, 6):
+    count = i * 1_000
+    delay = list_return_benchmark(count)
+    print(f"Count {count:>5,} takes: {delay*1e3:>6.2f}ms")
+>>>
+Count 1,000 takes:   1.97ms
+Count 2,000 takes:   6.99ms
+Count 3,000 takes:  14.59ms
+Count 4,000 takes:  26.12ms
+Count 5,000 takes:  40.38ms
+\end{codebox}
+
+使用 \texttt{list} 的方法或许对小图书馆够用，但它肯定无法扩展到亚历山大图书馆（Great Library of Alexandria）那样的规模——而这正是我所期望的！
+
+幸运的是，Python 提供了内置的 \texttt{heapq} 模块，它通过高效地实现优先队列解决了这一问题。堆（heap）是一种数据结构，能够维护一组条目，其中添加新条目或移除最小条目的计算复杂度是对数级（logarithmic，即比线性增长还要好）。在借书的例子中，"最小"意味着应还日期最早的书。\texttt{heapq} 最棒的地方在于，你无需理解堆是如何实现的，就能正确地使用该模块的函数。
+
+这里我用 \texttt{heapq} 模块重新实现 \texttt{add\_book} 函数。队列仍然是一个普通的 list。\texttt{heappush} 函数取代了之前的 \texttt{list.append} 调用，而且我不再需要对队列调用 \texttt{list.sort}：
+
+\begin{codebox}[python]
+from heapq import heappush
+def add_book(queue, book):
+    heappush(queue, book)
+\end{codebox}
+
+如果我试着把前面定义的 \texttt{Book} 类用在这里，就会得到这个有点费解的错误：
+
+\begin{codebox}[python]
+queue = []
+add_book(queue, Book("Little Women", "2019-06-05"))
+add_book(queue, Book("The Time Machine", "2019-05-30"))
+>>>
+Traceback ...
+TypeError: '<' not supported between instances of 'Book' and
+'Book'
+\end{codebox}
+
+之所以如此，是因为 \texttt{heapq} 模块要求优先队列中的条目可比较，并且具有自然的排序顺序（细节参见 Item 100（「用 \texttt{key} 参数按复杂条件排序」））。你可以借助内置的 \texttt{functools} 模块中的 \texttt{total\_ordering} 类装饰器（背景见 Item 66（「优先用类装饰器而非元类实现可组合的类扩展」）），并实现 \texttt{\_\_lt\_\_} 特殊方法（背景见 Item 57（「从 \texttt{collections.abc} 类继承以实现自定义容器类型」）），来迅速赋予 \texttt{Book} 类这一行为。
+
+这里我重新定义这个类，并增加一个小于方法（\texttt{\_\_lt\_\_}），它只是比较两个 \texttt{Book} 实例之间的 \texttt{due\_date} 字段：
+
+\begin{codebox}[python]
+import functools
+@functools.total_ordering
+class Book:
+    def __init__(self, title, due_date):
+        self.title = title
+        self.due_date = due_date
+    def __lt__(self, other):
+        return self.due_date < other.due_date
+\end{codebox}
+
+现在我可以毫无问题地用 \texttt{heapq.heappush} 函数把书添加到优先队列中：
+
+\begin{codebox}[python]
+queue = []
+add_book(queue, Book("Pride and Prejudice", "2019-06-01"))
+add_book(queue, Book("The Time Machine", "2019-05-30"))
+add_book(queue, Book("Crime and Punishment", "2019-06-06"))
+add_book(queue, Book("Wuthering Heights", "2019-06-12"))
+\end{codebox}
+
+或者，我也可以以任意顺序创建一个包含所有书的 list，然后利用 \texttt{list} 的 \texttt{sort} 方法来生成堆：
+
+\begin{codebox}[python]
+queue = [
+    Book("Pride and Prejudice", "2019-06-01"),
+    Book("The Time Machine", "2019-05-30"),
+    Book("Crime and Punishment", "2019-06-06"),
+    Book("Wuthering Heights", "2019-06-12"),
+]
+queue.sort()
+\end{codebox}
+
+或者，我也可以使用 \texttt{heapq.heapify} 函数，在线性时间内创建一个堆（这与 \texttt{sort} 方法的 \texttt{len(queue)} \texttt{*} \texttt{log(len(queue))} 复杂度不同）：
+
+\begin{codebox}[python]
+from heapq import heapify
+queue = [
+    Book("Pride and Prejudice", "2019-06-01"),
+    Book("The Time Machine", "2019-05-30"),
+    Book("Crime and Punishment", "2019-06-06"),
+    Book("Wuthering Heights", "2019-06-12"),
+]
+heapify(queue)
+\end{codebox}
+
+要检查逾期书籍，我查看列表的第一个元素，而非最后一个；然后使用 \texttt{heapq.heappop} 函数而非 \texttt{list.pop} 函数，把书从堆中移除：
+
+\begin{codebox}[python]
+from heapq import heappop
+def next_overdue_book(queue, now):
+    if queue:
+        book = queue[0]     # 最逾期者优先
+        if book.due_date < now:
+            heappop(queue)  # 移除逾期的书
+            return book
+    raise NoOverdueBooks
+\end{codebox}
+
+现在我可以按顺序找出并移除逾期书籍，直到当前时间已无逾期书为止：
+
+\begin{codebox}[python]
+now = "2019-06-02"
+book = next_overdue_book(queue, now)
+print(book.due_date, book.title)
+book = next_overdue_book(queue, now)
+print(book.due_date, book.title)
+try:
+    next_overdue_book(queue, now)
+except NoOverdueBooks:
+    pass          # 预期如此
+else:
+    assert False  # 不会发生
+>>>
+2019-05-30 The Time Machine
+2019-06-01 Pride and Prejudice
+\end{codebox}
+
+我可以编写另一个微基准测试，来测试这个使用 \texttt{heapq} 模块的实现方式的性能：
+
+\begin{codebox}[python]
+def heap_overdue_benchmark(count):
+    def prepare():
+        to_add = list(range(count))
+        random.shuffle(to_add)
+        return [], to_add
+    def run(queue, to_add):
+        for i in to_add:
+            heappush(queue, i)
+        while queue:
+            heappop(queue)
+    return timeit.timeit(
+        setup="queue, to_add = prepare()",
+        stmt="run(queue, to_add)",
+        globals=locals(),
+        number=1,
+    )
+\end{codebox}
+
+这个基准测试通过实验验证了：基于堆的优先队列实现扩展性要好得多（大约为 \texttt{len(queue)} \texttt{*} \texttt{math.log(len(queue))}），且不会以超线性的方式使性能下降：
+
+\begin{codebox}[python]
+for i in range(1, 6):
+    count = i * 10_000
+    delay = heap_overdue_benchmark(count)
+    print(f"Count {count:>5,} takes: {delay*1e3:>6.2f}ms")
+>>>
+Count 10,000 takes:   1.73ms
+Count 20,000 takes:   3.83ms
+Count 30,000 takes:   6.50ms
+Count 40,000 takes:   8.85ms
+Count 50,000 takes:  11.43ms
+\end{codebox}
+
+使用 \texttt{heapq} 实现后，还有一个问题：我该如何处理按时归还的情况？解决方法是：在书的应还日期到来之前，绝不把它从优先队列中移除。到那时，它会是列表中的第一个条目；而如果它已经被归还，我只需忽略它即可。这里我通过新增一个字段来记录书的归还状态，从而实现这一行为：
+
+\begin{codebox}[python]
+@functools.total_ordering
+class Book:
+    def __init__(self, title, due_date):
+        self.title = title
+        self.due_date = due_date
+        self.returned = False  # 新字段
+    ...
+\end{codebox}
+
+然后我改写 \texttt{next\_overdue\_book} 函数，让它反复忽略任何已经归还的书：
+
+\begin{codebox}[python]
+def next_overdue_book(queue, now):
+    while queue:
+        book = queue[0]
+        if book.returned:
+            heappop(queue)
+            continue
+        if book.due_date < now:
+            heappop(queue)
+            return book
+        break
+    raise NoOverdueBooks
+\end{codebox}
+
+这种做法让 \texttt{return\_book} 函数变得极快，因为它不对优先队列做任何修改：
+
+\begin{codebox}[python]
+def return_book(queue, book):
+    book.returned = True
+\end{codebox}
+
+这种归还方案的一个缺点是：如果图书馆所有的书都被借出并逾期，优先队列可能会增长到所需的最大尺寸。尽管得益于 \texttt{heapq}，队列操作会很快，但这一存储开销可能需要相当可观的内存（关于如何调试此类用法，参见 Item 115（「用 \texttt{tracemalloc} 了解内存使用与泄漏」））。
+
+如果你要构建一个健壮的系统，就需要为最坏情况做好规划；因此，你应当预计到每一本图书馆藏书都可能由于某种原因而逾期（例如，一场自然灾害导致通往图书馆的道路封闭）。这一内存代价是一个设计考量，你本应早已规划好，并通过额外的约束来缓解（例如，限制同时借出的书籍数量上限）。
+
+除了本例中用到的优先队列基本操作之外，\texttt{heapq} 模块还为高级用例提供了额外的功能（参见 \texttt{https://docs.python.org/3/library/heapq.html}）。当模块的功能恰好匹配你所面对的问题时，它是一个很好的选择（另一种线程安全的方案可参见 \texttt{queue.PriorityQueue} 类）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 优先队列（priority queue）让你能够按照重要性的顺序来处理条目，而非按照先进先出的顺序。
+\item 如果你试图用 list 的操作来实现优先队列，那么随着队列的增长，程序的性能会以超线性的方式下降。
+\item 内置的 \texttt{heapq} 模块提供了实现可高效扩展的优先队列所需的全部函数。
+\item 要使用 \texttt{heapq}，被排序的条目必须具有自然的排序顺序，这就要求为类定义诸如 \texttt{\_\_lt\_\_} 之类的特殊方法。
+\end{itemize}
+
+\section{Item 105: 用 datetime 而非 time 处理本地时钟}
+
+协调世界时（UTC）是标准的、与时区无关的时间表示方式。UTC 对于把时间表示为从 UNIX 纪元（epoch）起算的秒数的计算机来说非常合适。但 UTC 对人类来说并不理想。人类是相对于自己当前所在的地点来参照时间的。人们会说「中午」或「上午 8 点」，而不是「UTC 15:00 减 7 小时」。如果你的程序要处理时间，你很可能会发现自己需要在 UTC 与本地时钟之间转换时间，以便人类理解。
+
+Python 提供了两种实现时区转换的方法。旧的方式使用内置的 \texttt{time} 模块，极易出错。新的方式使用 \texttt{datetime}，在内置的 \texttt{zoneinfo} 模块协助下表现极佳。你应该同时熟悉 \texttt{time} 和 \texttt{datetime}，才能彻底理解为什么 \texttt{datetime} 是最佳选择，而 \texttt{time} 应当避免使用。
+
+\subsection{time 模块}
+
+\texttt{time} 内置模块中的 \texttt{localtime} 函数可以把一个 UNIX 时间戳（自 UTC 的 UNIX 纪元起算的秒数）转换为与宿主计算机时区相匹配的本地时间（我的环境是太平洋夏令时）。这个本地时间可以用 \texttt{strftime} 函数以人类可读的格式打印出来：
+
+\begin{codebox}[python]
+import time
+now = 1710047865.0
+local_tuple = time.localtime(now)
+time_format = "%Y-%m-%d %H:%M:%S"
+time_str = time.strftime(time_format, local_tuple)
+print(time_str)
+>>>
+2024-03-09 21:17:45
+\end{codebox}
+
+你也常常需要反方向操作：从人类可读的本地时间（用户输入）出发，把它转换为 UTC 时间。你可以先用 \texttt{strptime} 函数解析时间字符串，再调用 \texttt{mktime} 把本地时间转换为 UNIX 时间戳：
+
+\begin{codebox}[python]
+time_tuple = time.strptime(time_str, time_format)
+utc_now = time.mktime(time_tuple)
+print(utc_now)
+>>>
+1710047865.0
+\end{codebox}
+
+你如何把一个时区的本地时间转换为另一个时区的本地时间呢？举例来说，假设我要从旧金山飞往纽约，想知道当我抵达纽约时，旧金山是几点。我一开始可能会想，直接操纵 \texttt{time}、\texttt{localtime} 和 \texttt{strptime} 函数的返回值就能做时区转换。但这绝对是个坏主意。时区会因为地方法律而不断变化。要自己管理实在太复杂了，尤其是当你想处理全球每一座城市航班的起飞和降落时。
+
+许多操作系统都带有配置文件，能够自动跟上时区的变化。如果你的平台支持，Python 允许你通过 \texttt{time} 模块使用这些时区。但在另一些平台上，比如 Windows，\texttt{time} 模块根本无法提供一些时区功能。例如，下面我从旧金山的时区太平洋标准时间（PST）解析一个起飞时间：
+
+\begin{codebox}[python]
+parse_format = "%Y-%m-%d %H:%M:%S %Z"
+depart_sfo = "2024-03-09 21:17:45 PST"
+time_tuple = time.strptime(depart_sfo, parse_format)
+time_str = time.strftime(time_format, time_tuple)
+print(time_str)
+>>>
+2024-03-09 21:17:45
+\end{codebox}
+
+看到 \texttt{"PST"} 能与 \texttt{strptime} 函数配合工作后，我可能还会以为计算机已知的其他时区也能用。可惜事实并非如此。当 \texttt{strptime} 遇到东部夏令时（EDT，即纽约的时区，航班在时令变更后抵达时）时，它会抛出一个异常：
+
+\begin{codebox}[python]
+arrival_nyc = "2024-03-10 03:31:18 EDT"
+time_tuple = time.strptime(arrival_nyc, parse_format)
+>>>
+Traceback ...
+ValueError: time data '2024-03-10 03:31:18 EDT' does not match
+'format '%Y-%m-%d %H:%M:%S %Z'
+\end{codebox}
+
+这里的问题在于 \texttt{time} 模块的依赖平台特性。它的实际行为取决于底层 C 函数如何与宿主操作系统协作。这使得 \texttt{time} 模块在 Python 中的功能不可靠。\texttt{time} 模块无法稳定地正确处理多个本地时间。因此，你应该避免为此目的使用 \texttt{time} 模块。如果必须使用 \texttt{time}，也只应把它用于在 UTC 与宿主计算机的本地时间之间转换。其他所有类型的转换，都应使用 \texttt{datetime} 模块。
+
+\subsection{datetime 模块}
+
+在 Python 中表示时间的第二种选择，是 \texttt{datetime} 内置模块中的 \texttt{datetime} 类。和 \texttt{time} 模块一样，\texttt{datetime} 也能用于把当前的 UTC 时间转换为本地时间。这里我把当前的 UTC 时间转换为我计算机的本地时间（PDT）：
+
+\begin{codebox}[python]
+from datetime import datetime, timezone
+now = datetime(2024, 3, 10, 5, 17, 45)
+now_utc = now.replace(tzinfo=timezone.utc)
+now_local = now_utc.astimezone()
+print(now_local)
+>>>
+2024-03-09 21:17:45-08:00
+\end{codebox}
+
+\texttt{datetime} 模块也可以轻松地把本地时间转换回 UTC 中的 UNIX 时间戳（与上面的值一致）：
+
+\begin{codebox}[python]
+time_str = "2024-03-09 21:17:45"
+now = datetime.strptime(time_str, time_format)
+time_tuple = now.timetuple()
+utc_now = time.mktime(time_tuple)
+print(utc_now)
+>>>
+1710047865.0
+\end{codebox}
+
+与 \texttt{time} 模块不同，\texttt{datetime} 模块提供了可靠地从一个本地时间转换到另一个本地时间的手段。不过，\texttt{datetime} 只通过它的 \texttt{tzinfo} 类和相关的 方法来提供时区操作的机制。
+
+幸运的是，从 Python 3.9 版本起，在许多系统上，\texttt{zoneinfo} 内置模块包含了一份完整的时区定义数据库，囊括你可能需要的所有时区。在其他系统（比如 Windows）上，可能需要安装官方认可的 \texttt{tzdata} 社区包，才能提供 \texttt{zoneinfo} 模块正常运作所需的时区数据库（详见 Item 116「了解从哪里寻找社区构建的模块」）。
+
+要有效地使用 \texttt{zoneinfo}，你应该总是先把本地时间转换为 UTC。接着，对 UTC 值执行所需的任何 \texttt{datetime} 操作（例如偏移）。最后，再转换为本地时间。
+
+例如，这里我把一个纽约市航班的抵达时间转换为 UTC 的 \texttt{datetime}：
+
+\begin{codebox}[python]
+from zoneinfo import ZoneInfo
+arrival_nyc = "2024-03-10 03:31:18"
+nyc_dt_naive = datetime.strptime(arrival_nyc, time_format)
+eastern = ZoneInfo("US/Eastern")
+nyc_dt = nyc_dt_naive.replace(tzinfo=eastern)
+utc_dt = nyc_dt.astimezone(timezone.utc)
+print("EDT:", nyc_dt)
+print("UTC:", utc_dt)
+>>>
+EDT: 2024-03-10 03:31:18-04:00
+UTC: 2024-03-10 07:31:18+00:00
+\end{codebox}
+
+一旦我拿到了 UTC 的 \texttt{datetime}，就可以把它转换为旧金山的本地时间：
+
+\begin{codebox}[python]
+pacific = ZoneInfo("US/Pacific")
+sf_dt = utc_dt.astimezone(pacific)
+print("PST:", sf_dt)
+>>>
+PST: 2024-03-09 23:31:18-08:00
+\end{codebox}
+
+同样轻松，我还可以把它转换为尼泊尔的本地时间：
+
+\begin{codebox}[python]
+nepal = ZoneInfo("Asia/Katmandu")
+nepal_dt = utc_dt.astimezone(nepal)
+print("NPT", nepal_dt)
+>>>
+NPT 2024-03-10 13:16:18+05:45
+\end{codebox}
+
+有了 \texttt{datetime} 和 \texttt{zoneinfo}，这些转换在所有环境中都保持一致，无论宿主计算机运行的是什么操作系统。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 避免使用 \texttt{time} 模块在不同的时区之间做转换。
+\item 使用 \texttt{datetime} 和 \texttt{zoneinfo} 内置模块，可靠地在不同 时区的时间与日期之间转换。
+\item 始终用 UTC 表示时间，并把转换为本地时间作为展示前最后一步才进行。
+\end{itemize}
+
+\section{Item 106: 精度至关重要时使用 decimal}
+
+Python 是编写与数值数据交互的代码的优秀语言。Python 的整型可以表示任意实用大小的值。它的双精度浮点（floating point）类型符合 IEEE 754 标准。该语言还提供了一个标准的复数类型来表示虚数值。然而，这些并不足以应对所有情况。
+
+例如，假设我要计算一位客户使用便携式卫星电话拨打国际长途电话的费用。我知道客户通话的分钟数和秒数（比如 3 分 42 秒）。我也有从美国拨打南极洲的资费标准（比如每分钟 1.45 美元）。费用应该是多少？
+
+用浮点运算算出的费用看起来还算合理：
+
+\begin{codebox}[python]
+rate = 1.45
+seconds = 3 * 60 + 42
+cost = rate * seconds / 60
+print(cost)
+>>>
+5.364999999999999
+\end{codebox}
+
+由于 IEEE 754 浮点数（floating point）的表示方式，结果比正确值（5.365）少了 0.0001。我可能想把这个值向上取整到 5.37，以恰当地覆盖客户产生的所有成本。然而，由于浮点误差，对到最近的美分取整，实际上反而降低了最终费用（从 5.364 降到 5.36），而不是提高它（从 5.365 升到 5.37）：
+
+\begin{codebox}[python]
+print(round(cost, 2))
+>>>
+5.36
+\end{codebox}
+
+解决办法是使用 \texttt{decimal}（十进制）内置模块中的 \texttt{Decimal} 类。\texttt{Decimal} 类默认提供 28 位小数的定点运算——如有需要，还可以更高。这就绕开了 IEEE 754 浮点数的精度问题。这个类还让你对舍入行为有更多控制。
+
+例如，用 \texttt{Decimal} 重做南极洲的计算，得到的是精确的预期费用，而不是近似值：
+
+\begin{codebox}[python]
+from decimal import Decimal
+rate = Decimal("1.45")
+seconds = Decimal(3 * 60 + 42)
+cost = rate * seconds / Decimal(60)
+print(cost)
+>>>
+5.365
+\end{codebox}
+
+\texttt{Decimal} 实例可以通过两种不同的方式赋予初值。第一种方式是把一个包含数字的 \texttt{str} 传给 \texttt{Decimal} 构造函数。这确保了不会因为 Python 浮点值以及数字常量的固有特性而损失精度。第二种方式是直接向构造函数传入一个 \texttt{float} 或 \texttt{int} 实例。可以看到，这两种构造方式会产生不同的行为：
+
+\begin{codebox}[python]
+print(Decimal("1.45"))
+print(Decimal(1.45))
+>>>
+1.45
+1.4499999999999999555910790149937383830547332763671875
+\end{codebox}
+
+如果我向 \texttt{Decimal} 构造函数传入整数，就不会出现这个问题：
+
+\begin{codebox}[python]
+print("456")
+print(456)
+>>>
+456
+456
+\end{codebox}
+
+如果你在意精确的答案，那就宁可谨慎一些，始终对 \texttt{Decimal} 类型使用 \texttt{str} 构造函数。
+
+回到电话这个例子，假设我还想支持两地之间（比如托莱多和底特律）非常短的电话，它们通过辅助蜂窝连接接通要便宜得多。这里我计算一通时长 5 秒、资费每分钟 0.05 美元的电话的费用：
+
+\begin{codebox}[python]
+rate = Decimal("0.05")
+seconds = Decimal("5")
+small_cost = rate * seconds / Decimal(60)
+print(small_cost)
+>>>
+0.004166666666666666666666666667
+\end{codebox}
+
+结果低到当我试图把它取整到最近的美分时，被降为零。这可不行！
+
+\begin{codebox}[python]
+print(round(small_cost, 2))
+>>>
+0.00
+\end{codebox}
+
+幸运的是，\texttt{Decimal} 类有一个内置函数，可以按所需的舍入行为精确舍入到需要的那位小数。这对前面那个较高费用的情况同样有效：
+
+\begin{codebox}[python]
+from decimal import ROUND_UP
+rounded = cost.quantize(Decimal("0.01"), rounding=ROUND_UP)
+print(f"Rounded {cost} to {rounded}")
+>>>
+Rounded 5.365 to 5.37
+\end{codebox}
+
+以这种方式使用 \texttt{quantize} 方法，也能妥善处理短而便宜的电话这种小额使用场景：
+
+\begin{codebox}[python]
+rounded = small_cost.quantize(Decimal("0.01"),
+rounding=ROUND_UP)
+print(f"Rounded {small_cost} to {rounded}")
+>>>
+Rounded 0.004166666666666666666666666667 to 0.01
+\end{codebox}
+
+虽然 \texttt{Decimal} 对于定点数很好用，但它的精度仍有局限（例如 1/3 仍然是个近似值）。若要表示精度不受限制的有理数，可以考虑使用 \texttt{fractions} 内置模块中的 \texttt{Fraction} 类。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 拥有模块中的内置类型和类，可以表示几乎每一种数值类型。
+\item \texttt{Decimal} 类非常适合那些需要高精度以及对舍入行为有所控制的情形，例如货币值的计算。
+\item 如果计算出精确答案（而非浮点近似值）很重要，就向 \texttt{Decimal} 构造函数传入 \texttt{str} 实例，而不是 \texttt{float} 实例。
+\end{itemize}
+
+\section{Item 107: 用 copyreg 让 pickle 序列化可维护}
+
+\texttt{pickle} 内置（built-in）模块可以把 Python 对象序列化成字节（bytes）流，再把字节反序列化（deserialize）回对象（相关背景见 Item 10（「了解 \texttt{bytes} 与 \texttt{str} 的区别」））。经过 pickle 处理的字节流不应用于在互不信任的各方之间通信。\texttt{pickle} 的用途是让你在自己掌控的程序之间，通过二进制通道传递 Python 对象。
+
+注意：\texttt{pickle} 模块的序列化格式在设计上是不安全的。被序列化的数据本质上包含一段描述如何重建原始 Python 对象的程序。这意味着一个恶意的 pickle 载荷（payload）可能被用来攻陷任何试图反序列化它的 Python 程序的任何部分。
+
+相比之下，\texttt{json} 模块在设计上是安全的。序列化后的 JSON 数据只包含对对象层级的简单描述。反序列化 JSON 数据不会给 Python 程序带来超出内存耗尽（out-of-memory）错误之外的任何额外风险。像 JSON 这样的格式应当用于互不信任的程序或人员之间的通信。
+
+例如，假设我想用一个 Python 对象来表示玩家在游戏中的进度状态。该游戏状态包含玩家所处的关卡，以及剩余的生命数：
+
+\begin{codebox}[python]
+class GameState:
+    def __init__(self):
+        self.level = 0
+        self.lives = 4
+\end{codebox}
+
+随着游戏运行，程序会修改这个对象：
+
+\begin{codebox}[python]
+state = GameState()
+state.level += 1  # Player beat a level
+state.lives -= 1  # Player had to try again
+print(state.__dict__)
+>>>
+{'level': 1, 'lives': 3}
+\end{codebox}
+
+当用户退出游戏时，程序可以把游戏状态保存到文件，以便稍后继续。\texttt{pickle} 模块让这件事很容易做到。这里我直接把 \texttt{GameState} 对象 \texttt{dump} 到文件中：
+
+\begin{codebox}[python]
+import pickle
+state_path = "game_state.bin"
+with open(state_path, "wb") as f:
+    pickle.dump(state, f)
+\end{codebox}
+
+之后，我可以加载该文件，取回 \texttt{GameState} 对象，就像它从未被序列化过一样：
+
+\begin{codebox}[python]
+with open(state_path, "rb") as f:
+    state_after = pickle.load(f)
+print(state_after.__dict__)
+>>>
+{'level': 1, 'lives': 3}
+\end{codebox}
+
+这种做法的问题在于，随着游戏功能随时间扩展会发生什么。假设我想让玩家为高分累计点数。为了记录玩家的点数，我可以给 \texttt{GameState} 类添加一个新字段：
+
+\begin{codebox}[python]
+class GameState:
+    def __init__(self):
+        self.level = 0
+        self.lives = 4
+        self.points = 0  # New field
+\end{codebox}
+
+用 \texttt{pickle} 序列化新版本的 \texttt{GameState} 类，其效果与之前完全一样。这里我通过 \texttt{dumps} 序列化到字符串、再用 \texttt{loads} 还原为 \texttt{GameState} 对象，来模拟经过文件的一次往返：
+
+\begin{codebox}[python]
+state = GameState()
+serialized = pickle.dumps(state)
+state_after = pickle.loads(serialized)
+print(state_after.__dict__)
+>>>
+{'level': 0, 'lives': 4, 'points': 0}
+\end{codebox}
+
+但用户可能想要继续的旧 \texttt{GameState} 对象会怎样呢？这里我用一个带有新定义的 \texttt{GameState} 类的程序，来反序列化（unpickle）一个旧游戏文件：
+
+\begin{codebox}[python]
+with open(state_path, "rb") as f:
+    state_after = pickle.load(f)
+print(state_after.__dict__)
+>>>
+{'level': 1, 'lives': 3}
+\end{codebox}
+
+\texttt{points} 属性缺失了！这尤其令人困惑，因为返回的对象其实是新 \texttt{GameState} 类的一个实例：
+
+\begin{codebox}[python]
+assert isinstance(state_after, GameState)
+\end{codebox}
+
+这种行为是 \texttt{pickle} 模块工作方式的一个副产品。它的主要用例是让序列化对象变得容易。一旦你对 \texttt{pickle} 的使用超出简单的范畴，这个模块的功能就会以令人意外的方式开始失效。
+
+使用 \texttt{copyreg} 内置模块，修复这些问题直截了当。\texttt{copyreg} 模块允许你注册负责序列化和反序列化 Python 对象的函数，从而让你控制 \texttt{pickle} 的行为，使其更可靠、更灵活。
+
+\subsection{默认属性值}
+
+在最简单的情况下，你可以使用带有默认参数（default argument）的构造函数（相关背景见 Item 35（「用关键字参数（keyword argument）提供可选行为」）），以确保 \texttt{GameState} 对象在反序列化后始终拥有全部属性。这里我按如下方式重新定义构造函数：
+
+\begin{codebox}[python]
+class GameState:
+    def __init__(self, level=0, lives=4, points=0):
+        self.level = level
+        self.lives = lives
+        self.points = points
+\end{codebox}
+
+为了让这个构造函数用于 pickle，我定义一个辅助函数，它接收一个 \texttt{GameState} 对象，并将其转换为供 \texttt{copyreg} 模块使用的一组参数（元组）。返回的元组包含用于反序列化（unpickling）的函数，以及要传给该反序列化函数的参数：
+
+\begin{codebox}[python]
+def pickle_game_state(game_state):
+    kwargs = game_state.__dict__
+    return unpickle_game_state, (kwargs,)
+\end{codebox}
+
+现在我需要定义 \texttt{unpickle\_game\_state} 辅助函数。这个函数接收来自 \texttt{pickle\_game\_state} 的序列化数据和参数，并返回对应的 \texttt{GameState} 对象。它只是对构造函数的一层薄包装：
+
+\begin{codebox}[python]
+def unpickle_game_state(kwargs):
+    return GameState(**kwargs)
+\end{codebox}
+
+现在我用 \texttt{copyreg} 内置模块注册这些函数：
+
+\begin{codebox}[python]
+import copyreg
+copyreg.pickle(GameState, pickle_game_state)
+\end{codebox}
+
+注册之后，序列化和反序列化的工作方式与之前一样：
+
+\begin{codebox}[python]
+state = GameState()
+state.points += 1000
+serialized = pickle.dumps(state)
+state_after = pickle.loads(serialized)
+print(state_after.__dict__)
+>>>
+{'level': 0, 'lives': 4, 'points': 1000}
+\end{codebox}
+
+完成这次注册之后，现在我再修改 \texttt{GameState} 的定义，为玩家增加一个可用魔法咒语的数量。这次改动与我之前给 \texttt{GameState} 添加 \texttt{points} 字段时类似：
+
+\begin{codebox}[python]
+class GameState:
+    def __init__(self, level=0, lives=4, points=0, magic=5):
+        self.level = level
+        self.lives = lives
+        self.points = points
+        self.magic = magic  # New field
+\end{codebox}
+
+但与之前不同，反序列化一个旧的 \texttt{GameState} 对象会得到有效的游戏数据，而不是缺失属性。这之所以可行，是因为 \texttt{unpickle\_game\_state} 直接调用 \texttt{GameState} 的构造函数，而不是采用 \texttt{pickle} 模块只保存和恢复对象自身属性的默认行为。\texttt{GameState} 构造函数的关键字参数带有默认值，任何缺失的参数都会使用这些默认值。于是，旧游戏状态文件在反序列化时，新的 \texttt{magic} 字段会收到默认值：
+
+\begin{codebox}[python]
+print("Before:", state.__dict__)
+state_after = pickle.loads(serialized)
+print("After: ", state_after.__dict__)
+>>>
+Before: {'level': 0, 'lives': 4, 'points': 1000}
+After:  {'level': 0, 'lives': 4, 'points': 1000, 'magic': 5}
+\end{codebox}
+
+\subsection{类的版本管理}
+
+有时你需要通过移除字段，对 Python 对象做出不向后兼容（backward-incompatible）的改动。这样做会让用默认参数迁移序列化的方案失效。
+
+例如，假设我意识到限制生命数是个糟糕的主意，想从游戏中移除生命这一概念。这里我重新定义 \texttt{GameState} 类，使其不再拥有 \texttt{lives} 字段：
+
+\begin{codebox}[python]
+class GameState:
+    def __init__(self, level=0, points=0, magic=5):
+        self.level = level
+        self.points = points
+        self.magic = magic
+\end{codebox}
+
+问题在于，这会破坏对旧游戏数据的反序列化。旧数据中的所有字段——即便是已从类中移除的字段——都会被 \texttt{unpickle\_game\_state} 函数传给 \texttt{GameState} 的构造函数：
+
+\begin{codebox}[python]
+pickle.loads(serialized)
+>>>
+Traceback ...
+TypeError: GameState.__init__() got an unexpected keyword
+argument 'lives'. Did you mean 'level'?
+\end{codebox}
+
+我可以通过给提供给 \texttt{copyreg} 的函数添加一个 \texttt{version} 参数来修复这个问题。新的序列化数据在 pickle 一个新的 \texttt{GameState} 对象时，会指定 \texttt{version} 为 \texttt{2}：
+
+\begin{codebox}[python]
+def pickle_game_state(game_state):
+    kwargs = game_state.__dict__
+    kwargs["version"] = 2
+    return unpickle_game_state, (kwargs,)
+\end{codebox}
+
+旧版本的数据不会带有 \texttt{version} 参数，这意味着我可以相应地操控传给 \texttt{GameState} 构造函数的参数：
+
+\begin{codebox}[python]
+def unpickle_game_state(kwargs):
+    version = kwargs.pop("version", 1)
+    if version == 1:
+        del kwargs["lives"]
+    return GameState(**kwargs)
+\end{codebox}
+
+现在反序列化一个旧对象可以正常工作了：
+
+\begin{codebox}[python]
+copyreg.pickle(GameState, pickle_game_state)
+print("Before:", state.__dict__)
+state_after = pickle.loads(serialized)
+print("After: ", state_after.__dict__)
+>>>
+Before: {'level': 0, 'lives': 4, 'points': 1000}
+After:  {'level': 0, 'points': 1000, 'magic': 5}
+\end{codebox}
+
+我可以继续使用这种方法来处理同一个类在未来各版本之间的变动。任何把类的旧版本适配到新版本所需的逻辑，都可以放进 \texttt{unpickle\_game\_state} 函数里。
+
+\subsection{稳定的导入路径}
+
+使用 \texttt{pickle} 时你可能遇到的另一个问题，是因重命名类而导致的损坏。在程序的生命周期中，你经常会重构（refactor）代码：重命名类，并把它们移到其他模块。遗憾的是，这样做会破坏 \texttt{pickle} 模块，除非你格外小心。
+
+这里我把 \texttt{GameState} 类重命名为 \texttt{BetterGameState}，并从程序中彻底移除旧类：
+
+\begin{codebox}[python]
+class BetterGameState:
+    def __init__(self, level=0, points=0, magic=5):
+        self.level = level
+        self.points = points
+        self.magic = magic
+\end{codebox}
+
+现在尝试反序列化一个旧的 \texttt{GameState} 对象会失败，因为找不到这个类：
+
+\begin{codebox}[python]
+pickle.loads(serialized)
+>>>
+Traceback ...
+AttributeError: Can't get attribute 'GameState'
+on <module '__main__' from 'my_code.py'>
+\end{codebox}
+
+之所以抛出这个异常，是因为被序列化对象所属类的导入路径（import path）被编码进了 pickle 后的数据里：
+
+\begin{codebox}[python]
+print(serialized)
+>>>
+b'\x80\x04\x95A\x00\x00\x00\x00\x00\x00\x00\x8c\x08__main__\
+x94\x8c\tGameState\x94\x93\x94)\x81\x94}\x94(\x8c\x05level\
+x94K\x00\x8c\x06points\x94K\x00\x8c\x05magic\x94K\x05ub.'
+\end{codebox}
+
+解决办法是再次使用 \texttt{copyreg}。我可以为用于反序列化对象的函数指定一个稳定的标识符。这让我在反序列化时，能把 pickle 后的数据迁移到名称不同的其他类。它给了我一层间接（indirection）：
+
+\begin{codebox}[python]
+copyreg.pickle(BetterGameState, pickle_game_state)
+\end{codebox}
+
+在我使用 \texttt{copyreg} 之后，显然被序列化数据里编码的是指向 \texttt{unpickle\_game\_state} 的导入路径，而不是 \texttt{BetterGameState}：
+
+\begin{codebox}[python]
+state = BetterGameState()
+serialized = pickle.dumps(state)
+print(serialized)
+>>>
+b'\x80\x04\x95W\x00\x00\x00\x00\x00\x00\x00\x8c\x08__main__\
+'x94\x8c\x13unpickle_game_state\x94\x93\x94}\x94(\x8c\
+'x05level\x94K\x00\x8c\x06points\x94K\x00\x8c\x05magic\x94K\
+'x05\x8c\x07version\x94K\x02u\x85\x94R\x94.'
+\end{codebox}
+
+唯一要注意的陷阱（gotcha）是，我不能更改 \texttt{unpickle\_game\_state} 函数所在模块的路径。一旦我用某个函数序列化了数据，该函数在未来的反序列化中就必须始终可从那个导入路径获得。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{pickle} 内置模块只适用于在受信任的程序之间序列化和反序列化对象。
+\item 如果所涉及的类随时间发生了变化（例如，属性被添加或移除），那么反序列化之前 pickle 过的对象可能会出错。
+\item 将 \texttt{copyreg} 内置模块与 \texttt{pickle} 配合使用，以确保序列化对象的向后兼容性。
+\end{itemize}

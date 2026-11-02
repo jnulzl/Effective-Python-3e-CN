@@ -1,0 +1,2401 @@
+作为一种面向对象（object-oriented）的编程语言，Python 支持一整套特性，例如继承（inheritance）、多态（polymorphism）与封装（encapsulation）。在 Python 中把事情做成，常常需要编写新的类，并定义它们如何通过各自的接口与关系相互协作。
+
+类与继承让用对象表达 Python 程序的预期行为变得容易。它们让你能够随着时间推移改进并扩展功能，在需求不断变化的环境中提供灵活性。懂得善用类与继承，你就能写出可维护的代码。
+
+Python 还是一门多范式（multi-paradigm）语言，鼓励函数式风格的编程。函数对象是一等对象（first-class object），意味着它们能像普通变量一样被传递。Python 还允许你在同一个程序中混用面向对象风格与函数式风格的特性，这比单独使用某一种风格更强大。
+
+\section{Item 48: 用函数而非类来实现简单接口}
+
+Python 的许多内置（built-in）API 允许你通过传入函数来定制行为。这些钩子（hook）会被 API 在执行时回调你的代码。例如，\texttt{list} 类型的 \texttt{sort} 方法接受一个可选的 \texttt{key} 参数，用于确定排序时每个索引对应的值（详见 Item 100：用 \texttt{key} 参数按复杂条件排序）。这里我通过把内置函数 \texttt{len} 作为 \texttt{key} 钩子传入，按名字的长度对一组名字列表进行排序：
+
+\begin{codebox}[python]
+names = ["Socrates", "Archimedes", "Plato", "Aristotle"]
+names.sort(key=len)
+print(names)
+>>>
+['Plato', 'Socrates', 'Aristotle', 'Archimedes']
+\end{codebox}
+
+在其他语言中，你可能会以为钩子要由一个抽象类（abstract class）来定义。而在 Python 中，许多钩子其实就是没有状态的函数，它们有着文档完备的参数和返回值。函数非常适合充当钩子，因为它们比类更容易描述、也更易于实现。函数之所以能充当钩子，是因为 Python 拥有一等函数（first-class function）：函数和方法是语言中的一等对象，可以像其他任何值一样被传递和引用。
+
+例如，假设我想定制 \texttt{defaultdict} 类的行为（背景介绍见 Item 27：优先使用 \texttt{defaultdict} 而非 \texttt{setdefault} 处理内部状态中缺失的项）。这种数据结构允许你提供一个函数，每当访问到缺失的键时，就会以无参数的方式调用该函数。该函数必须返回这个缺失键在字典（dictionary）中应有的默认值。这里我定义了一个钩子，它在每次键缺失时打印日志，并把 \texttt{0} 作为默认值返回：
+
+\begin{codebox}[python]
+def log_missing():
+    print("Key added")
+    return 0
+\end{codebox}
+
+给定初始字典和一组期望的增量，我可以让 \texttt{log\_missing} 函数运行并打印两次（分别针对 \texttt{"red"} 和 \texttt{"orange"}）：
+
+\begin{codebox}[python]
+from collections import defaultdict
+current = {"green": 12, "blue": 3}
+increments = [
+    ("red", 5),
+    ("blue", 17),
+    ("orange", 9),
+]
+result = defaultdict(log_missing, current)
+print("Before:", dict(result))
+for key, amount in increments:
+    result[key] += amount
+print("After: ", dict(result))
+>>>
+Before: {'green': 12, 'blue': 3}
+Key added
+Key added
+After:  {'green': 12, 'blue': 20, 'red': 5, 'orange': 9}
+\end{codebox}
+
+允许像 \texttt{log\_missing} 这样的函数被传入，有助于 API 把副作用与确定性行为分离开来。例如，假设我现在希望传给 \texttt{defaultdict} 的默认值钩子能够统计缺失键的总数。实现方法之一是使用一个带状态的闭包（closure）（详见 Item 33：了解闭包如何与变量作用域（variable scope）和 \texttt{nonlocal} 交互）。这里我定义一个辅助函数，它把这样一个闭包用作默认值钩子：
+
+\begin{codebox}[python]
+def increment_with_report(current, increments):
+    added_count = 0
+    def missing():
+        nonlocal added_count  # 带状态的闭包
+        added_count += 1
+        return 0
+    result = defaultdict(missing, current)
+    for key, amount in increments:
+        result[key] += amount
+    return result, added_count
+\end{codebox}
+
+运行这个函数会得到预期的结果（\texttt{2}），即便 \texttt{defaultdict} 实例完全不知道 \texttt{missing} 钩子在 \texttt{added\_count} 这个闭包变量中维护着状态：
+
+\begin{codebox}[python]
+result, count = increment_with_report(current, increments)
+assert count == 2
+\end{codebox}
+
+为带状态的钩子定义闭包的问题在于，它比无状态函数的例子更难阅读。另一种做法是定义一个小型类来封装你想要追踪的状态：
+
+\begin{codebox}[python]
+class CountMissing:
+    def __init__(self):
+        self.added = 0
+    def missing(self):
+        self.added += 1
+        return 0
+\end{codebox}
+
+在其他语言中，你可能会以为现在必须修改 \texttt{defaultdict} 才能适配 \texttt{CountMissing} 的接口。但在 Python 中，借助一等函数，你可以直接引用对象上的 \texttt{CountMissing.missing} 方法，并将其作为默认值钩子传给 \texttt{defaultdict}。让一个对象实例的方法去满足函数接口是轻而易举的：
+
+\begin{codebox}[python]
+counter = CountMissing()
+result = defaultdict(counter.missing, current)  # 方法引用
+for key, amount in increments:
+    result[key] += amount
+assert counter.added == 2
+\end{codebox}
+
+像这样用一个辅助类来提供带状态闭包的行为，比使用上面的 \texttt{increment\_with\_report} 函数更清晰。然而单独来看，\texttt{CountMissing} 类的作用仍然不是一目了然。谁会构造一个 \texttt{CountMissing} 对象？谁会调用 \texttt{missing} 方法？将来这个类是否需要添加新的公有（public）方法？在看到它与 \texttt{defaultdict} 搭配使用之前，这个类多少是个谜。
+
+为了厘清这种状况，Python 类可以定义 \texttt{\_\_call\_\_} 这个特殊方法（special method）。\texttt{\_\_call\_\_} 让对象可以像函数一样被调用。它还会让内置函数 \texttt{callable} 对该实例返回 \texttt{True}，就像普通函数或方法一样。所有能以这种方式执行的对象都被称为可调用对象（callable）：
+
+\begin{codebox}[python]
+class BetterCountMissing:
+    def __init__(self):
+        self.added = 0
+    def __call__(self):
+        self.added += 1
+        return 0
+counter = BetterCountMissing()
+assert counter() == 0
+assert callable(counter)
+\end{codebox}
+
+这里我把一个 \texttt{BetterCountMissing} 实例作为 \texttt{defaultdict} 的默认值钩子，用于追踪被添加的缺失键的数量：
+
+\begin{codebox}[python]
+counter = BetterCountMissing()
+result = defaultdict(counter, current)  # 依赖 __call__
+for key, amount in increments:
+    result[key] += amount
+assert counter.added == 2
+\end{codebox}
+
+这比 \texttt{CountMissing.missing} 的例子清晰得多。\texttt{\_\_call\_\_} 方法表明，类的实例会在那些函数参数同样适用之处被使用（例如 API 钩子）。它把阅读代码的新人引向负责该类主要行为的入口点。它强有力地暗示了：这个类的目标是充当一个带状态的闭包。
+
+最重要的是，当你使用 \texttt{\_\_call\_\_} 时，\texttt{defaultdict} 仍然无从知晓背后发生了什么。\texttt{defaultdict} 唯一要求的，就是默认值钩子是一个可调用对象。Python 提供了多种不同的方式来满足一个简单的函数接口，你可以选择最适合自己需求的那个。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在 Python 中，对于组件之间的简单接口，与其定义并实例化类，往往不如直接改用函数。
+\item Python 中对函数和方法的引用是一等对象，意味着它们可以像其他任何类型一样用在表达式里。
+\item \texttt{\_\_call\_\_} 特殊方法让类的实例可以像普通 Python 函数一样被调用，并通过可调用检查。
+\item 当你需要让函数维持状态时，与其实现一个带状态的闭包函数，不如考虑定义一个提供 \texttt{\_\_call\_\_} 方法的类。
+\end{itemize}
+
+\section{Item 49: 优先使用面向对象多态，而非带 isinstance 检查的函数}
+
+假设我想做一个袖珍计算器，它接收简单的公式作为输入并计算出结果。为此，我通常会对输入的文本做分词（tokenize）和解析（parse），并创建一棵抽象语法树（abstract syntax tree，AST）来表示要执行的操作，这与 Python 编译器在加载程序时所做的类似。例如，这里我定义三个 AST 类，用于表示两个整数的加法和乘法：
+
+\begin{codebox}[python]
+class Integer:
+    def __init__(self, value):
+        self.value = value
+class Add:
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+class Multiply:
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+\end{codebox}
+
+对于像 \texttt{2 + 9} 这样的基本等式，我可以直接实例化对象来创建 AST（跳过分词和解析这一步）：
+
+\begin{codebox}[python]
+tree = Add(
+    Integer(2),
+    Integer(9),
+)
+\end{codebox}
+
+可以用一个递归函数来求值这样的 AST。对于它可能遇到的每一种操作类型，我都要在一个复合 \texttt{if} 语句中再添加一个分支。我可以用内置函数 \texttt{isinstance} 来依据被求值 AST 对象的类型来引导控制流（另一种做法见 Item 9：在流程控制中考虑用 \texttt{match} 做解构，当 \texttt{if} 语句已足够时避免使用）：
+
+\begin{codebox}[python]
+def evaluate(node):
+    if isinstance(node, Integer):
+        return node.value
+    elif isinstance(node, Add):
+        return evaluate(node.left) + evaluate(node.right)
+    elif isinstance(node, Multiply):
+        return evaluate(node.left) * evaluate(node.right)
+    else:
+        raise NotImplementedError
+\end{codebox}
+
+而事实上，这种解释 AST 的方法——通常称为树遍历（tree walking）——正如预期的那样工作：
+
+\begin{codebox}[python]
+print(evaluate(tree))
+>>>
+11
+\end{codebox}
+
+通过对每种类型的节点都调用同一个 \texttt{evaluate} 函数，系统就能在不增加复杂度的情况下支持任意嵌套。例如，这里我为等式 \texttt{(3 + 5) * (4 + 7)} 定义一棵 AST 并求值，而无需做任何其他代码改动：
+
+\begin{codebox}[python]
+tree = Multiply(
+    Add(Integer(3), Integer(5)),
+    Add(Integer(4), Integer(7)),
+)
+print(evaluate(tree))
+>>>
+88
+\end{codebox}
+
+现在，假设我在树中需要考虑的节点数量远远多于三个。我需要处理减法、除法、对数等等。数学的覆盖面极其广阔，节点类型可能有成百上千种。如果我必须在这个唯一的 \texttt{evaluate} 函数里完成所有事情，它就会变得极其冗长。即便我添加一些辅助函数并在 \texttt{elif} 块里调用它们，整个 \texttt{if} 复合语句也会变得无比庞大。一定有更好的办法。
+
+解决这个问题的一种常见做法是面向对象编程（object-oriented programming，OOP）。与其让一个函数为所有类型的对象包揽一切，不如把每种类型的功能封装在它自己的数据旁边（即放在方法里）。然后你依靠多态（polymorphism）在运行时将方法调用动态分派（dispatch）到正确的子类实现。这与 \texttt{if} 复合语句和 \texttt{isinstance} 检查的效果相同，但做法上无需把所有东西都定义在一个巨型函数里。
+
+对于这个袖珍计算器的例子，使用 OOP 要从定义一个超类（superclass）开始（背景见 Item 53：用 \texttt{super} 初始化父类），该超类包含应为 AST 中所有对象共有的方法：
+
+\begin{codebox}[python]
+class Node:
+    def evaluate(self):
+        raise NotImplementedError
+\end{codebox}
+
+每种类型的节点都需要实现 \texttt{evaluate} 方法，以计算与该对象所含数据相对应的结果。这里我为整数定义这个方法：
+
+\begin{codebox}[python]
+class IntegerNode(Node):
+    def __init__(self, value):
+        self.value = value
+    def evaluate(self):
+        return self.value
+\end{codebox}
+
+下面是加法和乘法操作对 \texttt{evaluate} 的实现：
+
+\begin{codebox}[python]
+class AddNode(Node):
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+    def evaluate(self):
+        left = self.left.evaluate()
+        right = self.right.evaluate()
+        return left + right
+class MultiplyNode(Node):
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+    def evaluate(self):
+        left = self.left.evaluate()
+        right = self.right.evaluate()
+        return left * right
+\end{codebox}
+
+创建表示 AST 的对象和之前一样简单，但这一次我可以直接在树对象上调用 \texttt{evaluate} 方法，而无需使用一个单独的辅助函数：
+
+\begin{codebox}[python]
+tree = MultiplyNode(
+    AddNode(IntegerNode(3), IntegerNode(5)),
+    AddNode(IntegerNode(4), IntegerNode(7)),
+)
+print(tree.evaluate())
+>>>
+88
+\end{codebox}
+
+其工作机制是：对 \texttt{tree.evaluate} 的调用会以 \texttt{tree} 实例去调用 \texttt{MultiplyNode.evaluate} 方法。接着，会为左节点调用 \texttt{AddNode.evaluate} 方法，后者进而为值 \texttt{3} 和 \texttt{5} 调用 \texttt{IntegerNode.evaluate}。此后，会为右节点调用 \texttt{AddNode.evaluate} 方法，它同样会为值 \texttt{4} 和 \texttt{7} 调用 \texttt{IntegerNode.evaluate}。关键在于，对于每个 \texttt{Node} 子类究竟该调用哪个 \texttt{evaluate} 方法实现，所有这类决定都发生在运行时。这正是面向对象多态的关键好处。
+
+之后，我可能需要为这个袖珍计算器添加更多功能。例如，我可以让计算器打印输入的公式，但采用一致且易读的漂亮格式。借助 OOP，我会通过在超类中再添加一个抽象方法，并在每个子类中实现它来达成这个目标。这里我为此新增了 \texttt{pretty} 方法：
+
+\begin{codebox}[python]
+class NodeAlt:
+    def evaluate(self):
+        raise NotImplementedError
+    def pretty(self):
+        raise NotImplementedError
+\end{codebox}
+
+整数的实现非常简单：
+
+\begin{codebox}[python]
+class IntegerNodeAlt(NodeAlt):
+    ...
+    def pretty(self):
+        return repr(self.value)
+\end{codebox}
+
+加法和乘法操作会深入到自己的左、右分支，以生成格式化后的结果：
+
+\begin{codebox}[python]
+class AddNodeAlt(NodeAlt):
+    ...
+    def pretty(self):
+        left_str = self.left.pretty()
+        right_str = self.right.pretty()
+        return f"({left_str} + {right_str})"
+class MultiplyNodeAlt(NodeAlt):
+    ...
+    def pretty(self):
+        left_str = self.left.pretty()
+        right_str = self.right.pretty()
+        return f"({left_str} * {right_str})"
+\end{codebox}
+
+与上面的 \texttt{evaluate} 方法类似，我可以在树根上调用 \texttt{pretty} 方法，从而把整棵 AST 格式化为一个字符串：
+
+\begin{codebox}[python]
+tree = MultiplyNodeAlt(
+    AddNodeAlt(IntegerNodeAlt(3), IntegerNodeAlt(5)),
+    AddNodeAlt(IntegerNodeAlt(4), IntegerNodeAlt(7)),
+)
+print(tree.pretty())
+>>>
+((3 + 5) * (4 + 7))
+\end{codebox}
+
+借助 OOP，你可以随着程序需求的增长不断添加更多的 AST 方法和子类。你无需维护一个带有几十个 \texttt{isinstance} 检查的巨型函数。每种类型都可以拥有各自自包含的（self-contained）实现，这让代码相对易于组织、扩展和测试。Python 还提供了许多额外的特性来让多态代码更有用（见 Item 52：使用 \texttt{@classmethod} 多态泛型地构造对象，以及 Item 57：从 \texttt{collections.abc} 类继承以自定义容器类型）。
+
+然而，同样重要的是要认识到，OOP 在解决某些类型的问题时存在严重的局限性，尤其是在大型程序中（见 Item 50：考虑用 \texttt{functools.singledispatch} 做函数式风格编程，而非面向对象多态）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 程序可以使用内置函数 \texttt{isinstance} 在运行时依据对象的类型来改变行为。
+\item 多态（polymorphism）是一种面向对象编程（OOP）技术，用于在运行时把方法调用分派到最具体的子类实现。
+\item 在多个类之间使用多态、而非使用 \texttt{isinstance} 检查的代码，往往更容易阅读、维护、扩展和测试。
+\end{itemize}
+
+\section{Item 50: 考虑用 functools.singledispatch 进行函数式编程，而非面向对象多态}
+
+在第 49 条（「优先以面向对象多态取代带 \texttt{isinstance} 检查的函数」）的口袋计算器示例中，我展示了面向对象编程（OOP）如何能让基于对象类型来变换行为变得更容易。最终，我得到了这样一个具有不同方法实现的类层级结构：
+
+\begin{codebox}[python]
+class NodeAlt:
+    def evaluate(self):
+        raise NotImplementedError
+    def pretty(self):
+        raise NotImplementedError
+class IntegerNodeAlt(NodeAlt):
+    def __init__(self, value):
+        self.value = value
+    def evaluate(self):
+        return self.value
+    def pretty(self):
+        return repr(self.value)
+class AddNodeAlt(NodeAlt):
+    ...
+class MultiplyNodeAlt(NodeAlt):
+    ...
+\end{codebox}
+
+这样就能在代表待执行计算的抽象语法树（AST）的根节点上调用递归方法 \texttt{evaluate} 和 \texttt{pretty}：
+
+\begin{codebox}[python]
+tree = MultiplyNodeAlt(
+    AddNodeAlt(IntegerNodeAlt(3), IntegerNodeAlt(5)),
+    AddNodeAlt(IntegerNodeAlt(4), IntegerNodeAlt(7)),
+)
+print(tree.evaluate())
+print(tree.pretty())
+>>>
+19
+((3 + 5) * (4 + 7))
+\end{codebox}
+
+现在，假设超类要求的不是 2 个方法，而是 25 个：某个方法可能化简方程；另一个检查未定义变量；还有一个计算导数；再一个生成 LaTeX 语法，依此类推。在典型的 OOP 做法中，我会给每个承载节点类型数据的类都添加 25 个新方法。这会让类定义变得非常庞大，尤其是考虑到可能还需要的所有辅助函数和支持性数据结构。面对如此多的代码，我会想把节点类的定义拆分到多个模块中（例如每种节点类型一个文件），以改善代码组织：
+
+\begin{codebox}[python]
+class NodeAlt2:
+    def evaluate(self):
+        ...
+    def pretty(self):
+        ...
+    def solve(self):
+        ...
+    def error_check(self):
+        ...
+    def derivative(self):
+        ...
+    # 还有 20 个方法……
+\end{codebox}
+
+遗憾的是，这种每种类一个模块的代码组织方式会在生产系统中引发严重的可维护性问题。关键症结在于，这 25 个新方法彼此之间其实可能截然不同，尽管它们都以某种方式与口袋计算器相关。在编辑和调试代码时，你需要的视图位于各个较大的、相互独立的系统内部（例如求解、错误检查），但在 OOP 中，这些系统必须分散到所有类上去实现。这意味着，在现实中，对于这个假想的例子，OOP 做法可能会让你为了完成简单的编程任务而在 25 个不同的文件之间跳转。代码似乎是按错误的轴向组织的。你几乎从不需要同时查看单个类的两个独立系统，但源文件的布局恰恰如此。更糟的是，OOP 的代码组织还会混淆依赖关系。以本例而言，生成 LaTeX 的方法可能需要导入一个处理该格式的原生库，求解公式的方法可能需要一个重量级的符号数学模块，等等。如果你的代码组织是以类为中心的，那就意味着每个定义类的模块都需要为所有方法导入全部依赖（相关背景见第 98 条「Lazy-Load Modules with Dynamic Imports to Reduce Startup Time」（用动态导入惰性加载模块以减少启动时间））。这会妨碍你构建自包含、分解良好的功能系统，从而损害可扩展性、可重构性和可测试性。所幸，OOP 并非唯一的选择。
+
+单分派（single dispatch）是一种函数式编程技术：程序根据某个参数的类型来决定调用函数的哪个版本。它的行为类似于多态（polymorphism），但也能避开 OOP 的诸多陷阱。你可以利用单分派，在不修改类的前提下为其「添加」方法。为此，Python 在内置的 \texttt{functools} 模块中提供了 \texttt{singledispatch} 装饰器。
+
+要使用 \texttt{singledispatch}，首先我需要定义负责分派的函数。这里我创建一个用于自定义对象打印的函数：
+
+\begin{codebox}[python]
+import functools
+@functools.singledispatch
+def my_print(value):
+    raise NotImplementedError
+\end{codebox}
+
+如果没有为第一个参数（\texttt{value}）的类型找到更合适的选项，就会作为最后手段调用这个函数的初始版本。我可以借助分派函数的 \texttt{register} 方法作为装饰器，为特定类型定制实现。这里我为内置的 \texttt{int} 和 \texttt{float} 类型添加了实现：
+
+\begin{codebox}[python]
+@my_print.register(int)
+def _(value):
+    print("Integer!", value)
+@my_print.register(float)
+def _(value):
+    print("Float!", value)
+\end{codebox}
+
+这些函数使用下划线（\texttt{\_}）来表示其名称无关紧要，也不会被直接调用；所有分派都将通过 \texttt{my\_print} 函数进行。这里我展示它对我目前已注册类型的运行效果：
+
+\begin{codebox}[python]
+my_print(20)
+my_print(1.23)
+>>>
+Integer! 20
+Float! 1.23
+\end{codebox}
+
+回到口袋计算器的例子，我可以不用 OOP、而用 \texttt{singledispatch} 来实现 \texttt{evaluate} 功能。首先，我定义一个新分派函数：
+
+\begin{codebox}[python]
+@functools.singledispatch
+def my_evaluate(node):
+    raise NotImplementedError
+\end{codebox}
+
+接着，我为简单的整数数据结构添加一个针对特定类型的实现：
+
+\begin{codebox}[python]
+class Integer:
+    def __init__(self, value):
+        self.value = value
+@my_evaluate.register(Integer)
+def _(node):
+    return node.value
+\end{codebox}
+
+我为简单的运算数据结构也提供了类似的实现。注意这些数据结构都没有定义任何额外的方法：
+
+\begin{codebox}[python]
+class Add:
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+@my_evaluate.register(Add)
+def _(node):
+    left = my_evaluate(node.left)
+    right = my_evaluate(node.right)
+    return left + right
+class Multiply:
+    def __init__(self, left, right):
+        self.left = left
+        self.right = right
+@my_evaluate.register(Multiply)
+def _(node):
+    left = my_evaluate(node.left)
+    right = my_evaluate(node.right)
+    return left * right
+\end{codebox}
+
+当我调用 \texttt{my\_evaluate} 时，这些函数会按预期工作：
+
+\begin{codebox}[python]
+tree = Multiply(
+    Add(Integer(3), Integer(5)),
+    Add(Integer(4), Integer(7)),
+)
+result = my_evaluate(tree)
+print(result)
+>>>
+88
+\end{codebox}
+
+现在，假设我想像第 49 条（「优先以面向对象多态取代带 \texttt{isinstance} 检查的函数」）那样实现方程美化打印，但不用 OOP。我只需再定义一个 \texttt{singledispatch} 函数，并为我想处理的每种类型装饰实现函数即可：
+
+\begin{codebox}[python]
+@functools.singledispatch
+def my_pretty(node):
+    raise NotImplementedError
+@my_pretty.register(Integer)
+def _(node):
+    return repr(node.value)
+@my_pretty.register(Add)
+def _(node):
+    left_str = my_pretty(node.left)
+    right_str = my_pretty(node.right)
+    return f"({left_str} + {right_str})"
+@my_pretty.register(Multiply)
+def _(node):
+    left_str = my_pretty(node.left)
+    right_str = my_pretty(node.right)
+    return f"({left_str} * {right_str})"
+\end{codebox}
+
+同样，这在不使用 OOP 的情况下按预期工作：
+
+\begin{codebox}[python]
+print(my_pretty(tree))
+>>>
+((3 + 5) * (4 + 7))
+\end{codebox}
+
+如果我创建一个新类型，它是我已注册类型的子类，那么它会立即适用于 \texttt{my\_pretty}，无需额外改动代码，因为它遵循方法解析顺序（method-resolution order），类似于继承（相关见第 53 条「用 \texttt{super} 初始化父类」）。例如，这里我添加一个 \texttt{Integer} 类型的子类，并展示它能够美化打印：
+
+\begin{codebox}[python]
+class PositiveInteger(Integer):
+    ...
+print(my_pretty(PositiveInteger(1234)))
+>>>
+1234
+\end{codebox}
+
+\texttt{singledispatch} 的难点在于我创建新类时。例如，用一种新类型的对象调用 \texttt{my\_pretty} 函数会抛出 \texttt{NotImplementedError} 异常，因为没有任何已注册的实现来处理这种新类型：
+
+\begin{codebox}[python]
+class Float:
+    ...
+print(my_pretty(Float(5.678)))
+>>>
+Traceback ...
+NotImplementedError
+\end{codebox}
+
+这就是使用函数式单分派的根本权衡：当你向代码中添加新类型时，需要为想支持的每个分派函数添加相应的实现。这可能需要修改程序中的许多甚至全部独立模块。相比之下，在面向对象多态中，新增类似乎更容易——只需实现所需的方法即可——但向系统添加新方法却要更新每一个类。尽管两种方式都有些摩擦，但在我看来，单分派的负担更轻，而好处不胜枚举。
+
+借助单分派，你可以在程序中拥有成千上万个数据结构和数百种行为，而不会用方法污染类定义。这让你能够在完全独立的模块中创建相互独立、彼此没有依赖关系、且外部依赖集很窄的行为系统。简单的数据结构可以位于程序依赖树的底层，并在整个代码库中共享，而不会产生高耦合。像这样使用单分派方法，能把代码按正确的轴向组织：所有相关行为都聚在一起，而不是散布在 OOP 类所在的无数模块中。
+
+最终，这让代码的维护、调试、扩展、重构和测试都更容易。话虽如此，当你的类共享通用功能、且较大的系统相互关联更紧密时，OOP 仍然是一个不错的选择。
+
+这些代码结构之间的选择，归结于程序各组件的独立程度，以及它们共享多少公共数据或行为。你也可以将 OOP 与单分派混合使用，以兼得两种风格的优点。例如，你可以给简单的类添加在所有独立系统中通用的工具方法。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 面向对象编程会导致以类为中心的代码组织，由于行为分散在众多模块中，这会让大型程序的构建与维护变得困难。
+\item 单分派是一种替代方案，它使用函数而非方法多态来实现动态分派（dynamic dispatch），从而能把相关功能在源码中拉得更近。
+\item Python 内置的 \texttt{functools} 模块提供了 \texttt{singledispatch} 装饰器，可用于实现单分派行为。
+\item 那些操作相同底层数据、但系统高度独立的程序，可能更适合采用单分派的函数式风格，而非 OOP。
+\end{itemize}
+
+\section{Item 51: 优先使用 dataclasses 定义轻量级类}
+
+刚开始编写 Python 程序时，很容易直接使用内置数据类型（例如字符串（str）和字典（dictionary）），并定义与它们交互的函数。当代码复杂到一定程度时，就有必要创建自己的对象类型来容纳数据并封装行为（示例参见 Item 29（"用组合类代替深度嵌套的字典、列表和元组"））。
+
+然而，Python 庞大的面向对象能力可能会让人望而生畏，对初学者尤其如此。为了让这些特性更易上手，Python 提供了各种各样的内置模块（参见 Item 57（"从 collections.abc 类继承来自定义容器类型"）），同时也有许多社区构建的包（例如 \texttt{attrs} 和 \texttt{pydantic}——参见 Item 116（"了解去哪里寻找社区构建的模块"））。
+
+其中一个特别有价值的内置模块是 \texttt{dataclasses}（数据类），借助它可以大幅减少类定义中重复的样板代码。使用该模块的开销是导入时的一点点性能损耗，这源于其实现方式会用到 \texttt{exec}（参见 Item 91（"除非你在开发开发者工具，否则避免使用 exec 和 eval"））。但这是非常值得的，尤其是对于那些方法很少或没有方法、主要用来在属性中存储数据的类。
+
+当你考虑自己动手实现 \texttt{dataclasses} 的每一项特性要花多少精力时，它的潜在好处就变得最为明显（更多示例参见 Item 56（"优先用 dataclasses 创建不可变对象"））。理解这些常见的面向对象惯用法在底层是如何工作的也很重要，这样当你不可避免地需要更多灵活性或定制能力时，才能把代码从 \texttt{dataclasses} 迁移出去。
+
+\subsection{避免 \texttt{\_\_init\_\_} 样板代码}
+
+使用对象要做的第一件事就是创建它们。当像调用函数那样使用类名时，会调用 \texttt{\_\_init\_\_} 特殊方法（special method）来构造一个对象。例如，这里我定义一个简单的类来存储 RGB（红、绿、蓝）颜色值：
+
+\begin{codebox}[python]
+class RGB:
+    def __init__(self, red, green, blue):
+        self.red = red
+        self.green = green
+        self.blue = blue
+\end{codebox}
+
+这段代码很啰嗦，每个属性的名字重复了三遍。它还容易出错，因为有很多机会会敲错字，或者不小心把一个属性赋给了 \texttt{\_\_init\_\_} 的错误参数：
+
+\begin{codebox}[python]
+class BadRGB:
+    def __init__(self, green, red, blue):  # Bad: Order swapped
+        self.red = red
+        self.green = green
+        self.bloe = blue                   # Bad: Typo
+\end{codebox}
+
+\texttt{dataclasses} 模块包含了一个类装饰器（decorator）（参见 Item 66（"优先使用类装饰器而非元类来实现可组合的类扩展"）），它能为这样的简单类提供更好的默认行为。这里我定义一个与上面类似的新类，但把它包在 \texttt{@dataclass} 装饰器里：
+
+\begin{codebox}[python]
+from dataclasses import dataclass
+
+@dataclass
+class DataclassRGB:
+    red: int
+    green: int
+    blue: int
+\end{codebox}
+
+要使用 \texttt{dataclass} 装饰器，我在类体中列出对象的每个属性，并附上相应的类型提示（type hint）（参见 Item 124（"考虑通过 typing 进行静态分析以消除缺陷"））。我只需识别每个属性一次，因此避免了敲错字的风险。如果我调整属性的顺序，只需要更新调用方，而不必保证类内部自身的一致性。
+
+有了这些类型标注（type annotation），我还可以使用静态类型检查（static type checking）工具，在程序执行之前发现错误。例如，这里我在构造对象并修改它时提供了错误的类型：
+
+\begin{codebox}[python]
+from dataclasses import dataclass
+
+@dataclass
+class DataclassRGB:
+    red: int
+    green: int
+    blue: int
+
+obj = DataclassRGB(1, "bad", 3)
+obj.red = "also bad"
+\end{codebox}
+
+类型检查器能够报告这些问题，而无需在类定义中添加更多代码：
+
+\begin{codebox}[python]
+>>>
+$ python3 -m mypy --strict example.py
+.../example.py:9: error: Argument 2 to "DataclassRGB" has
+incompatible type "str"; expected "int"  [arg-type]
+.../example.py:10: error: Incompatible types in assignment
+(expression has type "str", variable has type "int")
+[assignment]
+Found 2 errors in 1 file (checked 1 source file)
+\end{codebox}
+
+对于标准类，也可以通过在 \texttt{\_\_init\_\_} 方法中放置类型信息来实现同样的类型检查，但与类体相比，这个位置既局促又在视觉上显得杂乱：
+
+\begin{codebox}[python]
+class RGB:
+    def __init__(
+        self, red: int, green: int, blue: int
+    ) -> None:  # Changed
+        self.red = red
+        self.green = green
+        self.blue = blue
+\end{codebox}
+
+如果你不希望项目中使用类型标注（参见 Item 3（"永远不要指望 Python 在编译期发现错误"）），或者你需要让类的属性完全灵活，仍然可以使用 \texttt{dataclass} 装饰器。只需为字段提供来自内置 \texttt{typing} 模块的 \texttt{Any} 类型即可：
+
+\begin{codebox}[python]
+from typing import Any
+
+@dataclass
+class DataclassRGB:
+    red: Any
+    green: Any
+    blue: Any
+\end{codebox}
+
+\subsection{要求初始化参数必须以关键字形式传入}
+
+传给 \texttt{\_\_init\_\_} 的参数与传给其他任何函数调用一样，也就是说既允许位置参数（positional argument）也允许关键字参数（keyword argument）（背景知识参见 Item 35（"用关键字参数提供可选行为"））。例如，这里我用三种不同的方式初始化 \texttt{RGB} 类：
+
+\begin{codebox}[python]
+color1 = RGB(red=1, green=2, blue=3)
+color2 = RGB(1, 2, 3)
+color3 = RGB(1, 2, blue=3)
+\end{codebox}
+
+然而，这种灵活性容易出错，因为我太容易把不同的颜色分量值搞混。为了解决这个问题，我可以在参数列表中使用 \texttt{*} 符号，要求传给 \texttt{\_\_init\_\_} 的参数始终以关键字形式提供（详见 Item 37（"用仅限关键字和仅限位置的参数来增强清晰度"））：
+
+\begin{codebox}[python]
+class RGB:
+    def __init__(self, *, red, green, blue):  # Changed
+        self.red = red
+        self.green = green
+        self.blue = blue
+\end{codebox}
+
+现在，使用关键字参数是创建这些对象的唯一方式：
+
+\begin{codebox}[python]
+color4 = RGB(red=1, green=2, blue=3)
+\end{codebox}
+
+用位置参数初始化这个类会失败：
+
+\begin{codebox}[python]
+RGB(1, 2, 3)
+>>>
+Traceback ...
+TypeError: RGB.__init__() takes 1 positional argument but 4
+were given
+\end{codebox}
+
+默认情况下，被 \texttt{dataclass} 装饰器包裹的类同样会接受位置参数与关键字参数的混合。我只需把 \texttt{kw\_only} 标志传给装饰器，就能实现与上面相同的仅限关键字行为：
+
+\begin{codebox}[python]
+@dataclass(kw_only=True)
+class DataclassRGB:
+    red: int
+    green: int
+    blue: int
+\end{codebox}
+
+现在这个类必须以关键字参数来初始化：
+
+\begin{codebox}[python]
+color5 = DataclassRGB(red=1, green=2, blue=3)
+\end{codebox}
+
+传入任何位置参数都会失败，就像标准类的实现一样：
+
+\begin{codebox}[python]
+DataclassRGB(1, 2, 3)
+>>>
+Traceback ...
+TypeError: DataclassRGB.__init__() takes 1 positional argument
+but 4 were given
+\end{codebox}
+
+\subsection{提供属性的默认值}
+
+对于那些以存储数据为主的类，为某些属性提供默认值会很有用，这样每次构造对象时就不必都显式指定它们。
+
+例如，假设我想扩展 \texttt{RGB} 类，增加一个 \texttt{alpha} 字段来表示颜色在 0 到 1 标度上的透明度。默认情况下，我希望颜色是不透明的，即 \texttt{alpha} 为 1。这里我通过在 \texttt{\_\_init\_\_} 构造函数中为相应参数提供默认值来实现这一点：
+
+\begin{codebox}[python]
+class RGBA:
+    def __init__(self, *, red, green, blue, alpha=1.0):
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+\end{codebox}
+
+现在我就可以省略 \texttt{alpha} 参数，默认值照样会被赋值：
+
+\begin{codebox}[python]
+color1 = RGBA(red=1, green=2, blue=3)
+print(
+    color1.red,
+    color1.green,
+    color1.blue,
+    color1.alpha,
+)
+>>>
+1 2 3 1.0
+\end{codebox}
+
+要让 \texttt{dataclass} 装饰器实现同样的行为，我只需在类体中给属性赋一个默认值：
+
+\begin{codebox}[python]
+@dataclass(kw_only=True)
+class DataclassRGBA:
+    red: int
+    green: int
+    blue: int
+    alpha: int = 1.0
+\end{codebox}
+
+用这个新的构造函数创建一个对象，会为 \texttt{alpha} 属性赋上正确的默认值：
+
+\begin{codebox}[python]
+color2 = DataclassRGBA(red=1, green=2, blue=3)
+print(color2)
+>>>
+DataclassRGBA(red=1, green=2, blue=3, alpha=1.0)
+\end{codebox}
+
+然而，当默认值是可变（mutable）的时候，这两种做法都无法正确工作（类似问题参见 Item 26（"优先用 get 而非 in 和 KeyError 来处理缺失的字典键"），背景知识参见 Item 30（"了解函数参数可能被修改"））。
+
+例如，如果提供的默认值是一个列表，那么所有类实例之间会共享同一个对象引用，从而导致如下奇怪的行为：
+
+\begin{codebox}[python]
+class BadContainer:
+    def __init__(self, *, value=[]):
+        self.value = value
+
+obj1 = BadContainer()
+obj2 = BadContainer()
+obj1.value.append(1)
+print(obj2.value)  # Should be empty, but isn't
+>>>
+[1]
+\end{codebox}
+
+对于标准类，你可以通过在 \texttt{\_\_init\_\_} 方法中提供 \texttt{None} 作为默认值，然后动态地分配真正的默认值来解决这一问题（背景知识参见 Item 36（"用 None 和文档字符串来指定动态默认参数"））：
+
+\begin{codebox}[python]
+class MyContainer:
+    def __init__(self, *, value=None):
+        if value is None:
+            value = []  # Create when not supplied
+        self.value = value
+\end{codebox}
+
+现在每个对象默认都会分配到不同的列表：
+
+\begin{codebox}[python]
+obj1 = MyContainer()
+obj2 = MyContainer()
+obj1.value.append(1)
+assert obj1.value == [1]
+assert obj2.value == []
+\end{codebox}
+
+要让 \texttt{dataclass} 装饰器实现同样的行为，我可以使用 \texttt{dataclasses} 模块中的 \texttt{field} 辅助函数。它接受一个 \texttt{default\_factory} 参数，即为了在给该属性分配默认值时调用的函数：
+
+\begin{codebox}[python]
+from dataclasses import field
+
+@dataclass
+class DataclassContainer:
+    value: list = field(default_factory=list)
+\end{codebox}
+
+这同样修正了实现，确保每个新对象都拥有各自独立的列表实例：
+
+\begin{codebox}[python]
+obj1 = DataclassContainer()
+obj2 = DataclassContainer()
+obj1.value.append(1)
+assert obj1.value == [1]
+assert obj2.value == []
+\end{codebox}
+
+\texttt{dataclasses} 模块还提供了许多其他类似的有用特性，其详细说明见官方文档（https://docs.python.org/3/library/dataclasses.html）。
+
+\subsection{把对象表示为字符串}
+
+当你用标准方式在 Python 中定义新类时，即便是像 \texttt{print} 这样基础的特性似乎也无法正常工作。你看到的不是一份漂亮的属性和属性值清单，而是对象的内存地址，这几乎毫无用处：
+
+\begin{codebox}[python]
+color1 = RGB(red=1, green=2, blue=3)
+print(color1)
+>>>
+<__main__.RGB object at 0x1029a0b90>
+\end{codebox}
+
+要修复这一点，我可以实现 \texttt{\_\_repr\_\_} 特殊方法（背景知识参见 Item 12（"理解打印对象时 repr 与 str 的区别"））。这里我用一整条格式字符串，给一个标准 Python 类加上这样一个方法（背景知识参见 Item 11（"优先使用插值 f 字符串而非 C 风格格式字符串与 str.format"））：
+
+\begin{codebox}[python]
+class RGB:
+    ...
+    def __repr__(self):
+        return (
+            f"{type(self).__module__}"
+            f".{type(self).__name__}("
+            f"red={self.red!r}, "
+            f"green={self.green!r}, "
+            f"blue={self.blue!r})"
+        )
+\end{codebox}
+
+现在这些对象在被打印时会显示得很规整：
+
+\begin{codebox}[python]
+color1 = RGB(red=1, green=2, blue=3)
+print(color1)
+>>>
+__main__.RGB(red=1, green=2, blue=3)
+\end{codebox}
+
+然而，自己实现 \texttt{\_\_repr\_\_} 有两个问题。首先，它是需要加到每个类中的、重复的、啰嗦的样板代码。其次，它容易出错，因为我很容易忘记添加新属性、拼错属性名、在按位置构造时把属性名排错顺序，或者错误地插入分隔用的逗号和空白。
+
+\texttt{dataclass} 装饰器默认提供了 \texttt{\_\_repr\_\_} 特殊方法的实现，既提高了生产力，又避免了这些潜在的缺陷：
+
+\begin{codebox}[python]
+color2 = DataclassRGB(red=1, green=2, blue=3)
+print(color2)
+>>>
+DataclassRGB(red=1, green=2, blue=3)
+\end{codebox}
+
+\subsection{把对象转换为元组}
+
+为了有助于相等性测试、索引和排序，把对象转换为元组（tuple）会很有用。要在标准 Python 类中做到这一点，这里我定义一个新方法，把对象的各个属性打包在一起：
+
+\begin{codebox}[python]
+class RGB:
+    ...
+    def _astuple(self):
+        return (self.red, self.green, self.blue)
+\end{codebox}
+
+使用这个方法很简单：
+
+\begin{codebox}[python]
+color1 = RGB(1, 2, 3)
+print(color1._astuple())
+>>>
+(1, 2, 3)
+\end{codebox}
+
+\texttt{\_astuple} 方法还允许我复制一个对象：把返回值作为构造函数的位置参数，配合 \texttt{*} 运算符使用（背景知识参见 Item 34（"用可变位置参数减少视觉噪声"）和 Item 16（"优先使用全捕获解包而非切片"））：
+
+\begin{codebox}[python]
+color2 = RGB(*color1._astuple())
+print(color2.red, color2.green, color2.blue)
+>>>
+1 2 3
+\end{codebox}
+
+然而，与标准 Python 类的 \texttt{\_\_repr\_\_} 实现一样，\texttt{\_astuple} 方法需要容易出错的样板代码，并且存在完全相同的隐患。与之相反，我可以使用 \texttt{dataclasses} 模块中的 \texttt{astuple} 函数，对任意被 \texttt{dataclass} 装饰的类实现同样的行为：
+
+\begin{codebox}[python]
+from dataclasses import astuple
+
+color3 = DataclassRGB(1, 2, 3)
+print(astuple(color3))
+>>>
+(1, 2, 3)
+\end{codebox}
+
+\subsection{把对象转换为字典}
+
+为了有助于数据序列化（serialization），把对象转换为包含其属性的字典（dictionary）会很有用。我可以通过在标准 Python 类中定义一个新方法来做到这一点：
+
+\begin{codebox}[python]
+class RGB:
+    ...
+    def _asdict(self):
+        return dict(
+            red=self.red,
+            green=self.green,
+            blue=self.blue,
+        )
+\end{codebox}
+
+该方法的返回值可以传给内置 \texttt{json} 模块的 \texttt{dumps} 函数，以生成序列化表示：
+
+\begin{codebox}[python]
+import json
+
+color1 = RGB(red=1, green=2, blue=3)
+data = json.dumps(color1._asdict())
+print(data)
+>>>
+{"red": 1, "green": 2, "blue": 3}
+\end{codebox}
+
+\texttt{\_asdict} 方法还让你能够用一个关键字参数字典配合 \texttt{**} 运算符来创建对象的副本，这与 \texttt{\_astuple} 对位置参数的处理方式类似：
+
+\begin{codebox}[python]
+color2 = RGB(**color1._asdict())
+print(color2)
+>>>
+__main__.RGB(red=1, green=2, blue=3)
+\end{codebox}
+
+要让 \texttt{dataclasses} 模块实现同样的行为，我可以使用 \texttt{asdict} 函数，它能避免所有这些样板代码：
+
+\begin{codebox}[python]
+from dataclasses import asdict
+
+color3 = DataclassRGB(red=1, green=2, blue=3)
+print(asdict(color3))
+>>>
+{'red': 1, 'green': 2, 'blue': 3}
+\end{codebox}
+
+\texttt{dataclasses} 中的 \texttt{asdict} 函数也比我手写的 \texttt{\_asdict} 方法更胜一筹：它会自动转换嵌套在属性中的数据，包括基础的容器类型和其他 \texttt{dataclass} 对象。要用标准类实现同样的效果，则需要做多得多的功夫（详见 Item 54（"考虑用 mix-in 类组合功能"））。
+
+\subsection{检查对象是否相等}
+
+对于标准 Python 类，两个看起来相等的对象实际上并不相等：
+
+\begin{codebox}[python]
+color1 = RGB(1, 2, 3)
+color2 = RGB(1, 2, 3)
+print(color1 == color2)
+>>>
+False
+\end{codebox}
+
+这种行为的原因是，\texttt{\_\_eq\_\_} 特殊方法的默认实现使用了 \texttt{is} 运算符（operator），它测试两个操作数是否具有相同的标识（identity）（即它们是否占据内存中的同一位置）：
+
+\begin{codebox}[python]
+assert color1 == color1
+assert color1 is color1
+assert color1 != color2
+assert color1 is not color2
+\end{codebox}
+
+对于简单的类，当两个同类型、且属性值相同的对象被视为相等时会更有用。这里我借助 \texttt{\_astuple} 方法为标准 Python 类实现了这种行为：
+
+\begin{codebox}[python]
+class RGB:
+    ...
+    def __eq__(self, other):
+        return (
+            type(self) == type(other)
+            and self._astuple() == other._astuple()
+        )
+\end{codebox}
+
+现在 \texttt{==} 和 \texttt{!=} 运算符都能按预期工作：
+
+\begin{codebox}[python]
+color1 = RGB(1, 2, 3)
+color2 = RGB(1, 2, 3)
+color3 = RGB(5, 6, 7)
+assert color1 == color1
+assert color1 == color2
+assert color1 is not color2
+assert color1 != color3
+\end{codebox}
+
+当用 \texttt{dataclass} 装饰器创建类时，你会自动获得这一功能，无需自己实现 \texttt{\_\_eq\_\_}：
+
+\begin{codebox}[python]
+color4 = DataclassRGB(1, 2, 3)
+color5 = DataclassRGB(1, 2, 3)
+color6 = DataclassRGB(5, 6, 7)
+assert color4 == color4
+assert color4 == color5
+assert color4 is not color5
+assert color4 != color6
+\end{codebox}
+
+\subsection{让对象支持比较}
+
+除了相等性，比较两个对象以判断哪个更大或更小也很有用。例如，这里我定义一个标准类来表示宇宙中某颗行星的大小以及它与地球的距离：
+
+\begin{codebox}[python]
+class Planet:
+    def __init__(self, distance, size):
+        self.distance = distance
+        self.size = size
+
+    def __repr__(self):
+        return (
+            f"{type(self).__module__}"
+            f"{type(self).__name__}("
+            f"distance={self.distance}, "
+            f"size={self.size})"
+        )
+\end{codebox}
+
+如果我尝试对这些行星排序，会抛出一个异常，因为 Python 不知道如何给这些对象排序：
+
+\begin{codebox}[python]
+far = Planet(10, 5)
+near = Planet(1, 2)
+data = [far, near]
+data.sort()
+>>>
+Traceback ...
+TypeError: '<' not supported between instances of 'Planet' and
+'Planet'
+\end{codebox}
+
+针对这一限制存在变通办法，在许多情况下已足够（参见 Item 100（"使用 key 参数按复杂条件排序"））。不过，在另一些场景下，你需要让对象拥有自己的自然排序（natural ordering）（示例参见 Item 104（"了解如何用 heapq 实现优先队列"））。
+
+要在标准类中支持这种行为，我使用前面介绍的 \texttt{\_astuple} 辅助方法，来补齐 Python 比较对象所需的全部特殊方法：
+
+\begin{codebox}[python]
+class Planet:
+    ...
+    def _astuple(self):
+        return (self.distance, self.size)
+
+    def __eq__(self, other):
+        return (
+            type(self) == type(other)
+            and self._astuple() == other._astuple()
+        )
+
+    def __lt__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return self._astuple() < other._astuple()
+
+    def __le__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return self._astuple() <= other._astuple()
+
+    def __gt__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return self._astuple() > other._astuple()
+
+    def __ge__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return self._astuple() >= other._astuple()
+\end{codebox}
+
+Python 允许对不同类型进行比较，所以我需要返回 \texttt{NotImplemented} 单例（singleton）——它与 \texttt{NotImplementedError} 异常类（exception class）不是一回事——以表明对象何时不可比较。
+
+现在这些对象有了由 \texttt{\_astuple} 返回值给出的自然排序，而且无需任何额外的样板代码就能被排序（先按与地球的距离，再按大小）：
+
+\begin{codebox}[python]
+far = Planet(10, 2)
+near = Planet(1, 5)
+data = [far, near]
+data.sort()
+print(data)
+>>>
+[__main__Planet(distance=1, size=5), __main__
+Planet(distance=10, size=2)]
+\end{codebox}
+
+另一种减少所需特殊方法实现数量的选择，是内置 \texttt{functools} 模块中的 \texttt{total\_ordering} 类装饰器。但用 \texttt{dataclass} 实现同样的行为更加简单。只需传入 \texttt{order} 标志即可：
+
+\begin{codebox}[python]
+@dataclass(order=True)
+class DataclassPlanet:
+    distance: float
+    size: float
+\end{codebox}
+
+这些对象可以使用它们按在类体中的声明顺序排列的属性来进行比较：
+
+\begin{codebox}[python]
+far2 = DataclassPlanet(10, 2)
+near2 = DataclassPlanet(1, 5)
+assert far2 > near2
+assert near2 < far2
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 来自 \texttt{dataclasses} 内置模块的 \texttt{dataclass} 装饰器，可以用来定义通用而轻量级的类，而无需标准 Python 语法通常要求的样板代码。
+\item 使用 \texttt{dataclasses} 模块有助于你避开 Python 标准面向对象特性那啰嗦且易出错的本质所带来的陷阱。
+\item \texttt{dataclasses} 模块还提供了用于转换（例如 \texttt{asdict}、\texttt{astuple}）和高级属性行为（例如 \texttt{field}）的额外辅助函数。
+\item 重要的是，要知道如何自己实现这些面向对象惯用法，这样当你需要的定制能力超出 \texttt{dataclasses} 模块所能提供时，才能从中迁移出去。
+\end{itemize}
+
+\section{Item 52: 用 \texttt{@classmethod} 多态以通用方式构造对象}
+
+在 Python 中，不仅对象支持多态（polymorphism），类也同样支持。这是什么意思，又有什么用处呢？
+
+多态（polymorphism）使得继承体系中的多个类能够实现各自独特版本的方法。这意味着许多类可以提供不同的功能，同时满足相同的接口（interface）或抽象基类（abstract base class）（相关背景见 Item 49（「倾向于用面向对象多态而非带 isinstance 检查的函数」）以及 Item 57（「从 \texttt{collections.abc} 类继承以实现自定义容器类型」））。
+
+例如，假设我正在编写一个 map-reduce 实现，并且希望用一个通用的类来表示输入数据。这里我定义了这样一个类，其中包含一个必须由子类实现的 \texttt{read} 方法：
+
+\begin{codebox}[python]
+class InputData:
+    def read(self):
+        raise NotImplementedError
+\end{codebox}
+
+我还有一个 \texttt{InputData} 的具体子类，它从磁盘上的文件读取数据：
+
+\begin{codebox}[python]
+class PathInputData(InputData):
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+    def read(self):
+        with open(self.path) as f:
+            return f.read()
+\end{codebox}
+
+我可以拥有任意数量的 \texttt{InputData} 子类，比如 \texttt{PathInputData}，它们中的每一个都可以实现标准的 \texttt{read} 接口以返回待处理的数据。其他 \texttt{InputData} 子类可以从网络读取数据、透明地解压数据，等等。
+
+我还希望为 map-reduce 的 worker 提供一个类似的抽象接口，以标准方式消费输入数据：
+
+\begin{codebox}[python]
+class Worker:
+    def __init__(self, input_data):
+        self.input_data = input_data
+        self.result = None
+    def map(self):
+        raise NotImplementedError
+    def reduce(self, other):
+        raise NotImplementedError
+\end{codebox}
+
+这里我定义 \texttt{Worker} 的具体子类，以实现我想要应用的具体 map-reduce 函数——一个简单的新行计数器：
+
+\begin{codebox}[python]
+class LineCountWorker(Worker):
+    def map(self):
+        data = self.input_data.read()
+        self.result = data.count("\n")
+    def reduce(self, other):
+        self.result += other.result
+\end{codebox}
+
+这套实现看起来进展顺利，但我已经遇到了其中最大的障碍：是什么把这些片段连接在一起？我有一组接口与抽象都很合理的类，但它们只有在对象被构造出来之后才有用。究竟是哪个组件负责构建这些对象并编排 map-reduce 流程？
+
+最简单的做法是用手动编写一些辅助函数来构建并连接这些对象。这里我列出一个目录的内容，并为其中包含的每个文件构造一个 \texttt{PathInputData} 实例：
+
+\begin{codebox}[python]
+import os
+def generate_inputs(data_dir):
+    for name in os.listdir(data_dir):
+        yield PathInputData(os.path.join(data_dir, name))
+\end{codebox}
+
+接下来，我利用 \texttt{generate\_inputs} 返回的 \texttt{InputData} 实例来创建 \texttt{LineCountWorker} 实例：
+
+\begin{codebox}[python]
+def create_workers(input_list):
+    workers = []
+    for input_data in input_list:
+        workers.append(LineCountWorker(input_data))
+    return workers
+\end{codebox}
+
+我将这些 \texttt{Worker} 实例的 \texttt{map} 步骤分发给多个线程来并行执行（相关背景见 Item 68（「Use Threads for Blocking I/O; Avoid for Parallelism」））。然后，我反复调用 \texttt{reduce} 以将结果合并为单一的最终值：
+
+\begin{codebox}[python]
+from threading import Thread
+def execute(workers):
+    threads = [Thread(target=w.map) for w in workers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    first, *rest = workers
+    for worker in rest:
+        first.reduce(worker)
+    return first.result
+\end{codebox}
+
+最后，我在一个依次运行每个步骤的函数中把所有片段连接起来：
+
+\begin{codebox}[python]
+def mapreduce(data_dir):
+    inputs = generate_inputs(data_dir)
+    workers = create_workers(inputs)
+    return execute(workers)
+\end{codebox}
+
+用一组测试输入文件调用这个函数，效果很好：
+
+\begin{codebox}[python]
+import os
+import random
+def write_test_files(tmpdir):
+    os.makedirs(tmpdir)
+    for i in range(100):
+        with open(os.path.join(tmpdir, str(i)), "w") as f:
+            f.write("\n" * random.randint(0, 100))
+tmpdir = "test_inputs"
+write_test_files(tmpdir)
+result = mapreduce(tmpdir)
+print(f"There are {result} lines")
+>>>
+There are 4360 lines
+\end{codebox}
+
+问题出在哪里？最大的问题是，\texttt{mapreduce} 函数一点也不通用。如果我想再写一个新的 \texttt{InputData} 或 \texttt{Worker} 子类，我还得把 \texttt{generate\_inputs}、\texttt{create\_workers} 和 \texttt{mapreduce} 这几个函数一并重写，以与之配套。
+
+这个问题归根结底是需要一种通用的对象构造方式。在其他语言中，你会用构造器多态（constructor polymorphism）来解决这个问题，要求每个 \texttt{InputData} 子类都提供一个特殊的构造器，供编排 map-reduce 的辅助方法以通用方式使用（类似于工厂模式，factory pattern）。麻烦在于，Python 只允许单一的构造器方法（\texttt{\_\_init\_\_}）。要求每个 \texttt{InputData} 子类都拥有兼容的构造器是不合理的。
+
+解决此问题的最佳方式是使用类方法多态（class method polymorphism）。它和我用于 \texttt{InputData.read} 的实例方法多态（instance method polymorphism）完全一样，区别在于它针对的是整个类，而非这些类所构造出来的对象。
+
+让我把这个思路应用到 map-reduce 的类中。这里我给 \texttt{InputData} 类扩展一个通用的 \texttt{@classmethod}，它负责用统一的接口创建新的 \texttt{InputData} 实例：
+
+\begin{codebox}[python]
+class GenericInputData:
+    def read(self):
+        raise NotImplementedError
+    @classmethod
+    def generate_inputs(cls, config):
+        raise NotImplementedError
+\end{codebox}
+
+我让 \texttt{generate\_inputs} 接收一个字典（dictionary），其中包含 \texttt{GenericInputData} 具体子类需要解读的一组配置参数。这里我使用 \texttt{config} 参数来查找需要列出输入文件的目录：
+
+\begin{codebox}[python]
+class PathInputData(GenericInputData):
+    ...
+    @classmethod
+    def generate_inputs(cls, config):
+        data_dir = config["data_dir"]
+        for name in os.listdir(data_dir):
+            yield cls(os.path.join(data_dir, name))
+\end{codebox}
+
+类似地，我可以把 \texttt{create\_workers} 这个辅助函数变成 \texttt{GenericWorker} 类的一部分。这里我使用 \texttt{input\_class} 参数（它必须是 \texttt{GenericInputData} 的子类）来生成所需的输入：
+
+\begin{codebox}[python]
+class GenericWorker:
+    def __init__(self, input_data):
+        self.input_data = input_data
+        self.result = None
+    def map(self):
+        raise NotImplementedError
+    def reduce(self, other):
+        raise NotImplementedError
+    @classmethod
+    def create_workers(cls, input_class, config):
+        workers = []
+        for input_data in input_class.generate_inputs(config):
+            workers.append(cls(input_data))
+        return workers
+\end{codebox}
+
+请注意，上面调用 \texttt{input\_class.generate\_inputs} 正是我试图展示的类多态。你也可以看到，\texttt{create\_workers} 调用 \texttt{cls} 除了直接采用 \texttt{\_\_init\_\_} 方法之外，还提供了另一种构造 \texttt{GenericWorker} 对象的方式。
+
+对我具体的 \texttt{GenericWorker} 子类而言，影响仅仅是改变了它的父类：
+
+\begin{codebox}[python]
+class LineCountWorker(GenericWorker):  # Changed
+    ...
+\end{codebox}
+
+最后，我可以通过调用 \texttt{create\_workers} 类方法，将 \texttt{mapreduce} 函数重写为完全通用的形式：
+
+\begin{codebox}[python]
+def mapreduce(worker_class, input_class, config):
+    workers = worker_class.create_workers(input_class, config)
+    return execute(workers)
+\end{codebox}
+
+在一组测试文件上运行新的 worker，得到与旧实现相同的结果。区别在于，\texttt{mapreduce} 函数需要更多参数，从而能够以通用方式运作：
+
+\begin{codebox}[python]
+config = {"data_dir": tmpdir}
+result = mapreduce(LineCountWorker, PathInputData, config)
+print(f"There are {result} lines")
+>>>
+There are 4360 lines
+\end{codebox}
+
+现在我可以随心所欲地编写其他 \texttt{GenericInputData} 和 \texttt{GenericWorker} 子类，而无需重写任何胶水代码（glue code）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 每个类只支持单一的构造器：即 \texttt{\_\_init\_\_} 方法。
+\item 使用 \texttt{@classmethod} 为你的类定义替代构造器。
+\item 使用类方法多态来提供通用方式，以构建并连接众多具体子类。
+\end{itemize}
+
+\section{Item 53: 用 super 初始化父类}
+
+从子类初始化父类的旧式、简单做法，是用子类实例直接调用父类的 \texttt{\_\_init\_\_} 方法：
+
+\begin{codebox}[python]
+class MyBaseClass:
+    def __init__(self, value):
+        self.value = value
+class MyChildClass(MyBaseClass):
+    def __init__(self):
+        MyBaseClass.__init__(self, 5)
+\end{codebox}
+
+这种方式在基本的类层次结构中没问题，但在很多情况下会出问题。
+
+如果一个类受到多重继承（一般来说应当避免，见 Item 54「用 Mix-in 类组合功能」）的影响，直接调用父类的 \texttt{\_\_init\_\_} 方法会导致不可预测的行为。
+
+一个问题是，\texttt{\_\_init\_\_} 的调用顺序并未在所有子类中得到规定。例如，这里我定义了两个父类，它们操作实例的 \texttt{value} 字段：
+
+\begin{codebox}[python]
+class TimesTwo:
+    def __init__(self):
+        self.value *= 2
+class PlusFive:
+    def __init__(self):
+        self.value += 5
+\end{codebox}
+
+这个类以某一种顺序定义了它的父类：
+
+\begin{codebox}[python]
+class OneWay(MyBaseClass, TimesTwo, PlusFive):
+    def __init__(self, value):
+        MyBaseClass.__init__(self, value)
+        TimesTwo.__init__(self)
+        PlusFive.__init__(self)
+\end{codebox}
+
+构造它得到的结果是与父类顺序一致的：
+
+\begin{codebox}[python]
+foo = OneWay(5)
+print("First ordering value is (5 * 2) + 5 =", foo.value)
+>>>
+First ordering value is (5 * 2) + 5 = 15
+\end{codebox}
+
+这里还有另一个类，它定义了相同的父类，但顺序不同（\texttt{PlusFive} 在前、\texttt{TimesTwo} 在后，与之前相反）：
+
+\begin{codebox}[python]
+class AnotherWay(MyBaseClass, PlusFive, TimesTwo):
+    def __init__(self, value):
+        MyBaseClass.__init__(self, value)
+        TimesTwo.__init__(self)
+        PlusFive.__init__(self)
+\end{codebox}
+
+然而，我对父类构造函数的调用——\texttt{PlusFive.\_\_init\_\_} 和 \texttt{TimesTwo.\_\_init\_\_}——仍保持与之前相同的顺序，这意味着这个类的行为与其定义中父类的顺序并不一致。这里继承基类顺序与 \texttt{\_\_init\_\_} 调用顺序之间的冲突很难察觉，使得初次阅读这段代码的人尤其难以理解：
+
+\begin{codebox}[python]
+bar = AnotherWay(5)
+print("Second ordering should be (5 + 5) * 2, but is", bar.value)
+>>>
+Second ordering should be (5 + 5) * 2, but is 15
+\end{codebox}
+
+另一个问题出现在菱形继承时。菱形继承发生在某个子类继承自两个分别的类，而这两个类在层次结构中的某处拥有同一个父类。菱形继承会让那个公共父类的 \texttt{\_\_init\_\_} 方法运行多次，导致出乎意料的行为。例如，这里我定义了两个继承自 \texttt{MyBaseClass} 的子类：
+
+\begin{codebox}[python]
+class TimesSeven(MyBaseClass):
+    def __init__(self, value):
+        MyBaseClass.__init__(self, value)
+        self.value *= 7
+class PlusNine(MyBaseClass):
+    def __init__(self, value):
+        MyBaseClass.__init__(self, value)
+        self.value += 9
+\end{codebox}
+
+接着我定义一个同时继承自这两个类的子类，使 \texttt{MyBaseClass} 成为菱形的顶端：
+
+\begin{codebox}[python]
+class ThisWay(TimesSeven, PlusNine):
+    def __init__(self, value):
+        TimesSeven.__init__(self, value)
+        PlusNine.__init__(self, value)
+foo = ThisWay(5)
+print("Should be (5 * 7) + 9 = 44 but is", foo.value)
+>>>
+Should be (5 * 7) + 9 = 44 but is 14
+\end{codebox}
+
+对第二个父类构造函数 \texttt{PlusNine.\_\_init\_\_} 的调用，会在 \texttt{MyBaseClass.\_\_init\_\_} 第二次被调用时，把 \texttt{self.value} 重新设回 \texttt{5}。结果是 \texttt{self.value} 的计算结果变成了 \texttt{5 + 9 = 14}，完全忽略了 \texttt{TimesSeven.\_\_init\_\_} 构造函数的作用。这种行为令人意外，而且在更复杂的情况下会非常难以调试。
+
+为了解决这些问题，Python 提供了内置函数（built-in function）\texttt{super} 以及标准的「方法解析顺序（MRO）」。\texttt{super} 能确保菱形层次结构中的公共父类只运行一次（另见 Item 62「用 \texttt{\_\_init\_subclass\_\_} 校验子类」的例子）。
+
+MRO 定义了父类被初始化的顺序，它遵循一种称为 C3 线性化的算法。
+
+这里我再次创建一个菱形的类层次结构，但这次我用 \texttt{super} 来初始化父类：
+
+\begin{codebox}[python]
+class TimesSevenCorrect(MyBaseClass):
+    def __init__(self, value):
+        super().__init__(value)
+        self.value *= 7
+class PlusNineCorrect(MyBaseClass):
+    def __init__(self, value):
+        super().__init__(value)
+        self.value += 9
+\end{codebox}
+
+现在菱形的顶端部分 \texttt{MyBaseClass.\_\_init\_\_} 只运行一次。其他父类则按照 \texttt{class} 语句中指定的顺序运行：
+
+\begin{codebox}[python]
+class GoodWay(TimesSevenCorrect, PlusNineCorrect):
+    def __init__(self, value):
+        super().__init__(value)
+foo = GoodWay(5)
+print("Should be 7 * (5 + 9) = 98 and is", foo.value)
+>>>
+Should be 7 * (5 + 9) = 98 and is 98
+\end{codebox}
+
+这个顺序看起来似乎是反的。难道不应该 \texttt{TimesSevenCorrect.\_\_init\_\_} 先运行吗？结果难道不应该是 \texttt{(5 * 7) + 9 = 44} 吗？答案是否定的。这个顺序与 MRO 为这个类所定义的顺序一致。MRO 的顺序可以通过一个名为 \texttt{mro} 的类方法获取，或被缓存到一个名为 \texttt{\_\_mro\_\_} 的类属性中：
+
+\begin{codebox}[python]
+mro_str = "\n".join(repr(cls) for cls in GoodWay.__mro__)
+print(mro_str)
+>>>
+<class '__main__.GoodWay'>
+<class '__main__.TimesSevenCorrect'>
+<class '__main__.PlusNineCorrect'>
+<class '__main__.MyBaseClass'>
+<class 'object'>
+\end{codebox}
+
+当我调用 \texttt{GoodWay(5)} 时，它转而调用 \texttt{TimesSevenCorrect.\_\_init\_\_}，后者又调用 \texttt{PlusNineCorrect.\_\_init\_\_}，后者再调用 \texttt{MyBaseClass.\_\_init\_\_}。一旦到达菱形顶端，所有这些初始化方法实际执行工作的顺序，与它们的 \texttt{\_\_init\_\_} 函数被调用的顺序正好相反。\texttt{MyBaseClass.\_\_init\_\_} 把 \texttt{value} 赋为 \texttt{5}；\texttt{PlusNineCorrect.\_\_init\_\_} 加上 \texttt{9} 使 \texttt{value} 变为 \texttt{14}；\texttt{TimesSevenCorrect.\_\_init\_\_} 把它乘以 \texttt{7}，使 \texttt{value} 变为 \texttt{98}。
+
+除了让多重继承更加健壮之外，调用 \texttt{super().\_\_init\_\_} 也比在子类中直接调用 \texttt{MyBaseClass.\_\_init\_\_} 更具可维护性。日后我可以把 \texttt{MyBaseClass} 重命名为别的名字，或者让 \texttt{TimesSevenCorrect} 和 \texttt{PlusNineCorrect} 继承另一个父类，而不必相应更新它们的 \texttt{\_\_init\_\_} 方法。
+
+\texttt{super} 函数也可以用两个参数来调用：第一个参数是你试图访问其 MRO 父类视图的那个类的类型，第二个参数是要在这个视图上访问的实例。在构造函数中使用这些可选参数的形式如下：
+
+\begin{codebox}[python]
+class ExplicitTrisect(MyBaseClass):
+    def __init__(self, value):
+        super(ExplicitTrisect, self).__init__(value)
+        self.value /= 3
+\end{codebox}
+
+不过，对于对象实例的初始化，这些参数并不是必需的。当在类定义内部以零参数调用 \texttt{super} 时，Python 编译器会自动为你提供正确的参数（\texttt{\_\_class\_\_} 和 \texttt{self}）。这意味着下面这三种用法是等价的：
+
+\begin{codebox}[python]
+class AutomaticTrisect(MyBaseClass):
+    def __init__(self, value):
+        super(__class__, self).__init__(value)
+        self.value /= 3
+class ImplicitTrisect(MyBaseClass):
+    def __init__(self, value):
+        super().__init__(value)
+        self.value /= 3
+assert ExplicitTrisect(9).value == 3
+assert AutomaticTrisect(9).value == 3
+assert ImplicitTrisect(9).value == 3
+\end{codebox}
+
+只有当你需要从一个子类中访问某个父类实现的特定功能时（例如为了包装或复用该功能），才应该给 \texttt{super} 提供参数。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 标准 MRO 解决了父类初始化顺序与菱形继承的问题。
+\item 用零参数的内置函数 \texttt{super} 来初始化父类并调用父类方法。
+\end{itemize}
+
+\section{Item 54: 考虑用 Mix-in（混入类）组合功能}
+
+Python 是一门面向对象语言，其内置机制让多重继承（multiple inheritance）变得可控（参见 Item 53（「用 \texttt{super} 初始化父类」））。不过，最好还是彻底避免多重继承。
+
+如果你想要多重继承带来的便利与封装，却又想避开潜在的麻烦，不妨考虑改用 mix-in（混入类）。Mix-in（混入类）是一种只为其子类定义一小部分附加方法的类。Mix-in 类不会定义自己的实例属性（instance attribute），也不要求调用其 \texttt{\_\_init\_\_} 构造函数。
+
+编写 mix-in（混入类）很容易，因为 Python 让检视任意对象的当前状态变得轻而易举，无论其类型如何。动态检视（dynamic inspection）意味着我们只需在 mix-in（混入类）中编写一次通用功能，之后就能应用到许多其他类上。Mix-in 还可以组合与分层，从而最大限度地减少重复代码、提高复用。
+
+例如，假设我希望把 Python 对象从其在内存中的表示转换为一个可供序列化（serialization）的字典（dictionary）。为什么不把这一功能写成通用的，以便用在我所有的类上呢？
+
+这里我定义一个示例 mix-in（混入类），它通过为任何继承它的类添加一个公开方法来实现这一功能。其实现细节很直接，依赖使用 \texttt{hasattr} 的动态属性访问、使用 \texttt{isinstance} 的动态类型检视，以及访问实例字典（instance dictionary）\texttt{\_\_dict\_\_}：
+
+\begin{codebox}[python]
+class ToDictMixin:
+    def to_dict(self):
+        return self._traverse_dict(self.__dict__)
+    def _traverse_dict(self, instance_dict):
+        output = {}
+        for key, value in instance_dict.items():
+            output[key] = self._traverse(key, value)
+        return output
+    def _traverse(self, key, value):
+        if isinstance(value, ToDictMixin):
+            return value.to_dict()
+        elif isinstance(value, dict):
+            return self._traverse_dict(value)
+        elif isinstance(value, list):
+            return [self._traverse(key, i) for i in value]
+        elif hasattr(value, "__dict__"):
+            return self._traverse_dict(value.__dict__)
+        else:
+            return value
+\end{codebox}
+
+这里我定义一个示例类，它使用这个 mix-in（混入类）来生成二叉树（binary tree）的字典（dictionary）表示：
+
+\begin{codebox}[python]
+class BinaryTree(ToDictMixin):
+    def __init__(self, value, left=None, right=None):
+        self.value = value
+        self.left = left
+        self.right = right
+\end{codebox}
+
+把大量相关的 Python 对象转换为字典（dictionary）变得轻而易举：
+
+\begin{codebox}[python]
+tree = BinaryTree(
+    10,
+    left=BinaryTree(7, right=BinaryTree(9)),
+    right=BinaryTree(13, left=BinaryTree(11)),
+)
+print(tree.to_dict())
+>>>
+{'value': 10,
+ 'left': {'value': 7,
+          'left': None,
+          'right': {'value': 9, 'left': None, 'right': None}},
+ 'right': {'value': 13,
+           'left': {'value': 11, 'left': None, 'right': None},
+           'right': None}}
+\end{codebox}
+
+Mix-in（混入类）最妙的地方在于，你可以让它们的通用功能可插拔（pluggable），从而在需要时能够被覆盖。
+
+例如，这里我定义 \texttt{BinaryTree} 的一个子类，它持有指向父节点的引用。这种循环引用（circular reference）会导致 \texttt{ToDictMixin.to\_dict} 的默认实现陷入无限循环。解决办法是覆盖 \texttt{BinaryTreeWithParent.\_traverse} 方法，只处理重要的取值，从而阻止 mix-in（混入类）遇到的环。这里对 \texttt{\_traverse} 的覆盖会插入父节点的数值，其余情况则通过内置函数 \texttt{super} 回退到 mix-in（混入类）的默认实现：
+
+\begin{codebox}[python]
+class BinaryTreeWithParent(BinaryTree):
+    def __init__(
+        self,
+        value,
+        left=None,
+        right=None,
+        parent=None,
+    ):
+        super().__init__(value, left=left, right=right)
+        self.parent = parent
+    def _traverse(self, key, value):
+        if (
+            isinstance(value, BinaryTreeWithParent)
+            and key == "parent"
+        ):
+            return value.value  # 防止循环
+        else:
+            return super()._traverse(key, value)
+\end{codebox}
+
+调用 \texttt{BinaryTreeWithParent.to\_dict} 不会有任何问题，因为它不会顺着循环引用的属性走下去：
+
+\begin{codebox}[python]
+root = BinaryTreeWithParent(10)
+root.left = BinaryTreeWithParent(7, parent=root)
+root.left.right = BinaryTreeWithParent(9, parent=root.left)
+print(root.to_dict())
+>>>
+{'value': 10,
+ 'left': {'value': 7,
+          'left': None,
+          'right': {'value': 9,
+                    'left': None,
+                    'right': None,
+                    'parent': 7},
+          'parent': 10},
+ 'right': None,
+ 'parent': None}
+\end{codebox}
+
+通过定义 \texttt{BinaryTreeWithParent.\_traverse}，我还让任何拥有 \texttt{BinaryTreeWithParent} 类型属性的类都能自动与 \texttt{ToDictMixin} 配合工作：
+
+\begin{codebox}[python]
+class NamedSubTree(ToDictMixin):
+    def __init__(self, name, tree_with_parent):
+        self.name = name
+        self.tree_with_parent = tree_with_parent
+my_tree = NamedSubTree("foobar", root.left.right)
+print(my_tree.to_dict())  # 没有无限循环
+>>>
+{'name': 'foobar',
+ 'tree_with_parent': {'value': 9,
+                      'left': None,
+                      'right': None,
+                      'parent': 7}}
+\end{codebox}
+
+Mix-in（混入类）还可以组合在一起。例如，假设我想要一个为任意类提供通用 JSON 序列化（serialization）的 mix-in（混入类）。我可以假定某个类提供了 \texttt{to\_dict} 方法（该方法可能由 \texttt{ToDictMixin} 类提供，也可能没有）：
+
+\begin{codebox}[python]
+import json
+class JsonMixin:
+    @classmethod
+    def from_json(cls, data):
+        kwargs = json.loads(data)
+        return cls(**kwargs)
+    def to_json(self):
+        return json.dumps(self.to_dict())
+\end{codebox}
+
+注意 \texttt{JsonMixin} 类同时定义了实例方法和类方法。Mix-in（混入类）让你可以向子类添加任意一种行为（类似功能参见 Item 52（「用 \texttt{@classmethod} 多态性通用地构造对象」））。在这个例子中，\texttt{JsonMixin} 子类唯一的要求是提供一个 \texttt{to\_dict} 方法，并在 \texttt{\_\_init\_\_} 方法中接受关键字参数（keyword argument）（相关背景参见 Item 35（「用关键字参数提供可选行为」））。
+
+这个 mix-in（混入类）让创建可序列化的工具类层级结构变得简单，几乎无需样板代码（boilerplate）。例如，这里我有一组表示数据中心（datacenter）拓扑（topology）各组成部分的类层级：
+
+\begin{codebox}[python]
+class DatacenterRack(ToDictMixin, JsonMixin):
+    def __init__(self, switch=None, machines=None):
+        self.switch = Switch(**switch)
+        self.machines = [
+            Machine(**kwargs) for kwargs in machines]
+class Switch(ToDictMixin, JsonMixin):
+    def __init__(self, ports=None, speed=None):
+        self.ports = ports
+        self.speed = speed
+class Machine(ToDictMixin, JsonMixin):
+    def __init__(self, cores=None, ram=None, disk=None):
+        self.cores = cores
+        self.ram = ram
+        self.disk = disk
+\end{codebox}
+
+将这些类序列化为 JSON 以及从 JSON 反序列化都很简单。这里我验证数据能否通过序列化与反序列化实现往返（round-trip）传输：
+
+\begin{codebox}[python]
+serialized = """{
+    "switch": {"ports": 5, "speed": 1e9},
+    "machines": [
+        {"cores": 8, "ram": 32e9, "disk": 5e12},
+        {"cores": 4, "ram": 16e9, "disk": 1e12},
+        {"cores": 2, "ram": 4e9, "disk": 500e9}
+    ]
+}"""
+deserialized = DatacenterRack.from_json(serialized)
+roundtrip = deserialized.to_json()
+assert json.loads(serialized) == json.loads(roundtrip)
+\end{codebox}
+
+像这样使用 mix-in（混入类）时，即便你施加 \texttt{JsonMixin} 的类在类层级（class hierarchy）更上层已经继承了 \texttt{JsonMixin}，也没有问题。得益于 \texttt{super} 的行为，最终得到的类表现一致。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 如果 mix-in（混入类）能取得同样的效果，就应避免将多重继承与实例属性（instance attribute）和 \texttt{\_\_init\_\_} 一起使用。
+\item 当 mix-in（混入类）可能需要时，在实例层面使用可插拔（pluggable）行为，以提供逐类的定制。
+\item Mix-in（混入类）可以包含实例方法或类方法，视你的需要而定。
+\item 组合多个 mix-in（混入类），用简单的行为构建出复杂的功能。
+\end{itemize}
+
+\section{Item 55: 优先选用公有属性而非私有属性}
+
+在 Python 中，类的属性（attribute）只有两种可见性（visibility）：公有（public）与私有（private）：
+
+\begin{codebox}[python]
+class MyObject:
+    def __init__(self):
+        self.public_field = 5
+        self.__private_field = 10
+    def get_private_field(self):
+        return self.__private_field
+\end{codebox}
+
+公有属性（public attribute）可被任何人通过对对象使用点运算符（dot operator）来访问：
+
+\begin{codebox}[python]
+foo = MyObject()
+assert foo.public_field == 5
+\end{codebox}
+
+私有字段（private field）通过在属性名前加双下划线（double underscore）来指定。它们可以被包含类的方法直接访问：
+
+\begin{codebox}[python]
+assert foo.get_private_field() == 10
+\end{codebox}
+
+然而，从类的外部直接访问私有字段会引发异常：
+
+\begin{codebox}[python]
+foo.__private_field
+>>>
+Traceback ...
+AttributeError: 'MyObject' object has no attribute
+''__private_field'
+\end{codebox}
+
+类方法（class method）也能访问私有属性，因为它们声明在包围的 \texttt{class} 代码块内：
+
+\begin{codebox}[python]
+class MyOtherObject:
+    def __init__(self):
+        self.__private_field = 71
+    @classmethod
+    def get_private_field_of_instance(cls, instance):
+        return instance.__private_field
+bar = MyOtherObject()
+assert MyOtherObject.get_private_field_of_instance(bar) == 71
+\end{codebox}
+
+正如对私有字段的预期，子类（subclass）无法访问其父类的私有字段：
+
+\begin{codebox}[python]
+class MyParentObject:
+    def __init__(self):
+        self.__private_field = 71
+class MyChildObject(MyParentObject):
+    def get_private_field(self):
+        return self.__private_field
+baz = MyChildObject()
+baz.get_private_field()
+>>>
+Traceback ...
+AttributeError: 'MyChildObject' object has no attribute
+''_MyChildObject__private_field'
+\end{codebox}
+
+私有属性的行为是通过对属性名做一个简单变换（transformation）来实现的。当 Python 编译器在诸如 \texttt{MyChildObject.get\_private\_field} 这样的方法中看到私有属性访问时，它会把对 \texttt{\_\_private\_field} 的属性访问改写成使用 \texttt{\_MyChildObject\_\_private\_field} 这个名字。在上面的例子中，\texttt{\_\_private\_field} 只在 \texttt{MyParentObject.\_\_init\_\_} 中定义，这意味着该私有属性的真实名称是 \texttt{\_MyParentObject\_\_private\_field}。从子类访问父类的私有属性之所以失败，仅仅是因为变换后的属性名并不存在（是 \texttt{\_MyChildObject\_\_private\_field} 而非 \texttt{\_MyParentObject\_\_private\_field}）。
+
+了解这一机制后，你无需请求许可，就能轻松访问任意类的私有属性——无论是从子类还是从外部：
+
+\begin{codebox}[python]
+assert baz._MyParentObject__private_field == 71
+\end{codebox}
+
+如果你查看对象的属性字典（attribute dictionary），就会发现私有属性实际是以变换之后的名字存储的：
+
+\begin{codebox}[python]
+print(baz.__dict__)
+>>>
+{'_MyParentObject__private_field': 71}
+\end{codebox}
+
+为什么私有属性的语法实际上并不强制严格的可见性？最简单的答案就是 Python 中常被引用的一句格言：「我们都是成年人了（We are all consenting adults here）。」这句话的意思是，我们不需要语言来阻止我们做想做的事。按照自己的意愿扩展功能、并为这种风险带来的后果负责，是我们各自的选择。Python 程序员相信，开放的好处——默认允许对类进行计划外的扩展——超过了其弊端。
+
+除此之外，能够钩挂（hook）诸如属性访问之类的语言特性（参见 Item 61「使用 \texttt{\_\_getattr\_\_}、\texttt{\_\_getattribute\_\_} 和 \texttt{\_\_setattr\_\_} 实现惰性属性」），使得你可以随时摆弄对象的内部。既然你能这么做，那么 Python 试图阻止私有属性访问还有什么意义呢？
+
+为了尽量减少因无意中访问内部实现而造成的损害，Python 程序员遵循风格指南中定义的命名约定（参见 Item 2「遵循 PEP 8 风格指南」）。任何以单个下划线为前缀的字段（如 \texttt{\_protected\_field}）按约定属于受保护（protected）字段，这意味着类的外部使用者应当谨慎对待。
+
+然而，刚接触 Python 的程序员可能会考虑使用私有字段来表明一个内部 API，这个 API 不应被子类或外部访问：
+
+\begin{codebox}[python]
+class MyStringClass:
+    def __init__(self, value):
+        self.__value = value
+    def get_value(self):
+        return str(self.__value)
+foo = MyStringClass(5)
+assert foo.get_value() == "5"
+\end{codebox}
+
+这是错误的做法。不可避免地，会有某人——甚至可能是你自己——想要子类化你的类，以增添新行为或绕开既有方法的缺陷（例如 \texttt{MyStringClass.get\_value} 总是返回一个字符串这一点）。选用私有属性，只会让子类的重写（override）与扩展变得笨重而脆弱。当你潜在的子类作者确实不得不这么做时，他们仍然会去访问那些私有字段：
+
+\begin{codebox}[python]
+class MyIntegerSubclass(MyStringClass):
+    def get_value(self):
+        return int(self._MyStringClass__value)
+foo = MyIntegerSubclass("5")
+assert foo.get_value() == 5
+\end{codebox}
+
+但是，如果你上方的类层次结构（class hierarchy）发生了变化，这些类就会崩溃，因为私有属性引用不再有效。这里，\texttt{MyIntegerSubclass} 类的直接父类 \texttt{MyStringClass} 被加上了另一个名为 \texttt{MyBaseClass} 的父类：
+
+\begin{codebox}[python]
+class MyBaseClass:
+    def __init__(self, value):
+        self.__value = value
+    def get_value(self):
+        return self.__value
+class MyStringClass(MyBaseClass):
+    def get_value(self):
+        return str(super().get_value())         # 已更新
+class MyIntegerSubclass(MyStringClass):
+    def get_value(self):
+        return int(self._MyStringClass__value)  # 未更新
+\end{codebox}
+
+现在，\texttt{\_\_value} 属性被赋值在 \texttt{MyBaseClass} 父类中，而不是 \texttt{MyStringClass} 父类。这导致私有变量引用 \texttt{self.\_MyStringClass\_\_value} 在 \texttt{MyIntegerSubclass} 中失效：
+
+\begin{codebox}[python]
+foo = MyIntegerSubclass(5)
+foo.get_value()
+>>>
+Traceback ...
+AttributeError: 'MyIntegerSubclass' object has no attribute
+''_MyStringClass__value'
+\end{codebox}
+
+一般而言，更稳妥的做法是倾向于允许子类借助受保护属性做更多事情。为每个受保护字段编写文档，说明哪些字段是可供子类使用的内部 API，哪些则应当完全不去触碰。这既是对其他程序员的建议，也是给你未来的自己关于如何安全地扩展自己代码的指引：
+
+\begin{codebox}[python]
+class MyStringClass:
+    def __init__(self, value):
+        # 这里存放用户提供的对象取值。
+        # 它应当能转换为字符串。一旦赋给对象，
+        # 就应被视为不可变（immutable）。
+        self._value = value
+    ...
+\end{codebox}
+
+唯一值得认真考虑使用私有属性的情形，是你担心子类之间出现命名冲突（naming conflict）的时候。当某个子类无意中定义了一个其父类已经定义过的属性时，就会发生这个问题：
+
+\begin{codebox}[python]
+class ApiClass:
+    def __init__(self):
+        self._value = 5
+    def get(self):
+        return self._value
+class Child(ApiClass):
+    def __init__(self):
+        super().__init__()
+        self._value = "hello"  # 冲突
+a = Child()
+print(f"{a.get()} and {a._value} should be different")
+>>>
+hello and hello should be different
+\end{codebox}
+
+这主要是一个与公共 API（public API）一部分的类有关的问题；子类不受你的控制，因此你无法通过重构来修复问题。对于非常常见的属性名（如 \texttt{value}），这种冲突尤其可能发生。为了降低这一问题出现的风险，你可以在父类中使用私有属性，以确保没有任何属性名会与子类重叠：
+
+\begin{codebox}[python]
+class ApiClass:
+    def __init__(self):
+        self.__value = 5       # 双下划线
+    def get(self):
+        return self.__value    # 双下划线
+class Child(ApiClass):
+    def __init__(self):
+        super().__init__()
+        self._value = "hello"  # 没问题！
+a = Child()
+print(f"{a.get()} and {a._value} are different")
+>>>
+5 and hello are different
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 私有属性并没有被 Python 编译器严格强制实施。
+\item 从一开始就做好规划，让你的内部 API 和属性允许子类做更多事情，而不是选择把它们拒之门外。
+\item 用受保护字段的文档来引导子类，而不是试图用私有属性来强制访问控制。
+\item 只有在为避免与不受你控制的子类发生命名冲突时，才考虑使用私有属性。
+\end{itemize}
+
+\section{Item 56: 优先使用 dataclasses 创建不可变对象}
+
+在 Python 中，几乎所有东西都可以在运行时被修改，这是该语言哲学的一个基本组成部分（参见 Item 55（"优先使用公共属性而非私有属性"）以及 Item 3（"切勿指望 Python 在编译期检测错误"））。然而，这种灵活性常常会引发难以调试的问题。
+
+要缩小可能出错的范围，一种做法是禁止在对象创建之后修改它们。这一要求迫使代码以函数式风格（functional style）编写，在这种风格中，函数和方法的主要目的是稳定地将输入映射为输出，有点像数学方程式。
+
+以这种风格编写的函数很容易测试。你只需考虑参数与返回值的等价性，而不必担心对象引用与标识。对于不会进行可变状态转换或引发外部副作用的函数，理解和修改都很直接。而且，通过返回之后无法被修改的值，函数可以避免下游出现意外。
+
+通过创建不可变对象（immutable object），你可以让自己的数据类型也享受到这些优势。内置模块 \texttt{dataclasses}（数据类）（背景请参见 Item 51（"优先使用 dataclasses 定义轻量级类"））提供了一种定义此类类的方式，其效率远高于使用 Python 标准的面向对象特性。\texttt{dataclasses} 还开箱即用地提供了其他功能，例如能够将值对象（value object）用作字典（dictionary）的键以及集合（set）中的元素。
+
+\subsection{防止对象被修改}
+
+在 Python 中，传递给函数的所有参数都是按引用传递的，遗憾的是，这使得调用方（caller）的数据可以被任何被调用方（callee）修改（详见 Item 30（"了解函数参数可被修改"））。这种行为会引发各种各样令人困惑的缺陷。例如，下面我定义一个标准类，用来表示二维空间中一个带标签的点的位置：
+
+\begin{codebox}[python]
+class Point:
+    def __init__(self, name, x, y):
+        self.name = name
+        self.x = x
+        self.y = y
+\end{codebox}
+
+我可以定义一个行为良好的辅助函数，用于计算两点之间的距离，并且不会修改输入：
+
+\begin{codebox}[python]
+def distance(left, right):
+    return ( (left.x - right.x) ** 2 +
+(left.y - right.y) ** 2) ** 0.5
+origin1 = Point("source", 0, 0)
+point1 = Point("destination", 3, 4)
+print(distance(origin1, point1))
+>>>
+5.0
+\end{codebox}
+
+我还可以定义一个行为不佳的函数，它会覆盖第一个参数的 \texttt{x} 属性的值：
+
+\begin{codebox}[python]
+def bad_distance(left, right):
+    left.x = -3
+    return distance(left, right)
+\end{codebox}
+
+这种修改会导致计算出错，并且会永久改变 \texttt{origin} 对象的状态，以至于后续的计算也会不正确：
+
+\begin{codebox}[python]
+print(bad_distance(origin1, point1))
+print(origin1.x)
+>>>
+7.211102550927978
+-3
+\end{codebox}
+
+在标准类中，我可以通过实现 \texttt{\_\_setattr\_\_} 和 \texttt{\_\_delattr\_\_} 这两个特殊方法（special method），并让它们抛出 \texttt{AttributeError} 异常（exception），来防止这类修改（背景请参见 Item 61（"使用 \texttt{\_\_getattr\_\_}、\texttt{\_\_getattribute\_\_} 与 \texttt{\_\_setattr\_\_} 实现惰性属性"））。为了设置初始属性值，我直接在 \texttt{\_\_dict\_\_} 实例字典中赋值键：
+
+\begin{codebox}[python]
+class ImmutablePoint:
+    def __init__(self, name, x, y):
+        self.__dict__.update(name=name, x=x, y=y)
+    def __setattr__(self, key, value):
+        raise AttributeError("Immutable object: set not allowed")
+    def __delattr__(self, key):
+        raise AttributeError("Immutable object: del not allowed")
+\end{codebox}
+
+现在我可以像之前一样进行距离计算并得到正确答案：
+
+\begin{codebox}[python]
+origin2 = ImmutablePoint("source", 0, 0)
+assert distance(origin2, point1) == 5
+\end{codebox}
+
+但使用会修改输入的行为不佳的函数则会引发异常：
+
+\begin{codebox}[python]
+bad_distance(origin2, point1)
+>>>
+Traceback ...
+AttributeError: Immutable object: set not allowed
+\end{codebox}
+
+要使用 \texttt{dataclasses}（数据类）内置模块实现相同的行为，我只需把 \texttt{frozen} 标志传给 \texttt{dataclass}（数据类）装饰器即可：
+
+\begin{codebox}[python]
+from dataclasses import dataclass
+@dataclass(frozen=True)
+class DataclassImmutablePoint:
+    name: str
+    x: float
+    y: float
+origin3 = DataclassImmutablePoint("origin", 0, 0)
+assert distance(origin3, point1) == 5
+\end{codebox}
+
+试图修改这个新 \texttt{dataclass}（数据类）的属性，会在运行时引发类似的 \texttt{AttributeError} 错误：
+
+\begin{codebox}[python]
+bad_distance(origin3, point1)
+>>>
+Traceback ...
+FrozenInstanceError: cannot assign to field 'x'
+\end{codebox}
+
+作为额外的好处，\texttt{dataclass}（数据类）这种方案还能让静态分析（static analysis）工具在程序执行前就发现这个问题（详见 Item 124（"考虑用 \texttt{typing} 进行静态分析以消除缺陷"））：
+
+\begin{codebox}[python]
+from dataclasses import dataclass
+@dataclass(frozen=True)
+class DataclassImmutablePoint:
+    name: str
+    x: float
+    y: float
+origin = DataclassImmutablePoint("origin", 0, 0)
+origin.x = -3
+>>>
+$ python3 -m mypy --strict example.py
+.../example.py:10: error: Property "x" defined in
+"DataclassImmutablePoint" is read-only  [misc]
+Found 1 error in 1 file (checked 1 source file)
+\end{codebox}
+
+你也可以使用内置模块 \texttt{typing} 中的 \texttt{Final} 和 \texttt{Never} 标注，使标准类同样能在静态分析中报错，但这需要多得多的代码：
+
+\begin{codebox}[python]
+from typing import Any, Final, Never
+class ImmutablePoint:
+    name: Final[str]
+    x: Final[int]
+    y: Final[int]
+    def __init__(self, name: str, x: int, y: int) -> None:
+        self.name = name
+        self.x = x
+        self.y = y
+    def __setattr__(self, key: str, value: Any) -> None:
+        if key in self.__annotations__ and key not in dir(self):
+            # 允许第一次赋值发生
+            super().__setattr__(key, value)
+        else:
+            raise AttributeError("Immutable object")
+    def __delattr__(self, key: str) -> Never:
+        raise AttributeError("Immutable object")
+\end{codebox}
+
+\subsection{创建替换了属性的对象副本}
+
+当对象不可变时，一个自然而然的问题出现了：当无法修改数据结构时，你该如何编写能完成任何任务的代码？例如，下面我还有另一个辅助函数，它按相对量移动一个 \texttt{Point} 对象：
+
+\begin{codebox}[python]
+def translate(point, delta_x, delta_y):
+    point.x += delta_x
+    point.y += delta_y
+\end{codebox}
+
+正如预期，当输入对象不可变时，它会失败：
+
+\begin{codebox}[python]
+point1 = ImmutablePoint("destination", 5, 3)
+translate(point1, 10, 20)
+>>>
+Traceback ...
+AttributeError: Immutable object: set not allowed
+\end{codebox}
+
+绕开这一限制的一种办法，是返回一个带有更新后属性值的给定参数的副本：
+
+\begin{codebox}[python]
+def translate_copy(point, delta_x, delta_y):
+    return ImmutablePoint(
+        name=point.name,
+        x=point.x + delta_x,
+        y=point.y + delta_y,
+    )
+\end{codebox}
+
+然而，这种做法容易出错，因为你需要复制所有你不想修改的属性，比如这里的 \texttt{name}。随着类不断添加、移除或更改属性，这段复制代码可能会变得不同步，从而在程序中引发难以察觉的缺陷。
+
+为了在标准类中降低此类错误的风险，下面我添加一个方法，它知道如何用给定的一组属性覆盖项来创建对象的副本：
+
+\begin{codebox}[python]
+class ImmutablePoint:
+    ...
+    def _replace(self, **overrides):
+        fields = dict(
+            name=self.name,
+            x=self.x,
+            y=self.y,
+        )
+        fields.update(overrides)
+        cls = type(self)
+        return cls(**fields)
+\end{codebox}
+
+现在代码可以依赖 \texttt{\_replace} 方法来确保所有属性都被妥善处理。下面我定义另一个版本的 \texttt{translate} 函数，它使用了这个方法：
+
+\begin{codebox}[python]
+def translate_replace(point, delta_x, delta_y):
+    return point._replace(  # 已变更
+        x=point.x + delta_x,
+        y=point.y + delta_y,
+    )
+\end{codebox}
+
+注意，\texttt{name} 属性不再被提及。
+
+但这种方法仍然不够理想。虽然我把字段复制代码集中到了类内部的一个位置，但 \texttt{\_replace} 方法仍有可能变得不同步，因为它需要手动维护。此外，每个需要此功能的类都必须定义自己的 \texttt{\_replace} 方法，这会带来更多需要管理的样板代码（boilerplate code）。
+
+要用 \texttt{dataclass}（数据类）实现相同的行为，我只需使用 \texttt{dataclasses} 模块中的 \texttt{replace} 辅助函数即可；无需修改类定义，无需自定义 \texttt{\_replace} 方法，而且该方法也不存在变得不同步的可能：
+
+\begin{codebox}[python]
+import dataclasses
+def translate_dataclass(point, delta_x, delta_y):
+    return dataclasses.replace(  # 已变更
+        point,
+        x=point.x + delta_x,
+        y=point.y + delta_y,
+    )
+\end{codebox}
+
+\subsection{在字典与集合中使用不可变对象}
+
+当你在 \texttt{dict}（字典）中把同一个键赋给不同的值时，你期望只保留最后的映射：
+
+\begin{codebox}[python]
+my_dict = {}
+my_dict["a"] = 123
+my_dict["a"] = 456
+print(my_dict)
+>>>
+{'a': 456}
+\end{codebox}
+
+类似地，当你向一个集合（set）中添加某个值时，你期望之后所有添加同一值的操作都不会改变该集合，因为该元素已经存在：
+
+\begin{codebox}[python]
+my_set = set()
+my_set.add("b")
+my_set.add("b")
+print(my_set)
+>>>
+{'b'}
+\end{codebox}
+
+这些稳定的映射与去重行为是人们对这些数据结构如何工作的关键预期。令人惊讶的是，默认情况下，用户自定义的对象并不能像上面代码中的简单值 \texttt{"a"} 和 \texttt{"b"} 那样用作字典键或集合元素。
+
+例如，假设我想编写一个模拟电学物理的程序。这里我创建一个字典，将 \texttt{Point} 对象映射到该位置上的电荷量（可能还有其他字典把同样的 \texttt{Point} 对象映射到磁通量等其他物理量，等等）：
+
+\begin{codebox}[python]
+point1 = Point("A", 5, 10)
+point2 = Point("B", -7, 4)
+charges = {
+    point1: 1.5,
+    point2: 3.5,
+}
+\end{codebox}
+
+从字典中检索某个给定 \texttt{Point} 的值，看起来是可行的：
+
+\begin{codebox}[python]
+print(charges[point1])
+>>>
+1.5
+\end{codebox}
+
+但如果我创建了另一个看起来与第一个等价的 \texttt{Point} 对象——相同的坐标与名称——字典查找就会抛出一个 \texttt{KeyError} 异常（exception）：
+
+\begin{codebox}[python]
+point3 = Point("A", 5, 10)
+charges[point3]
+>>>
+Traceback ...
+KeyError: <__main__.Point object at 0x100e85eb0>
+\end{codebox}
+
+进一步查看后发现，这些 \texttt{Point} 对象并不被认为等价，因为我还没有为这个类实现 \texttt{\_\_eq\_\_} 特殊方法（special method）：
+
+\begin{codebox}[python]
+assert point1 != point3
+\end{codebox}
+
+对象上 \texttt{==} 运算符的默认实现与 \texttt{is} 运算符相同，后者只比较对象的标识。下面我实现 \texttt{\_\_eq\_\_} 特殊方法，让它改为比较对象属性的值：
+
+\begin{codebox}[python]
+class Point:
+    ...
+    def __eq__(self, other):
+        return (
+            type(self) == type(other)
+            and self.name == other.name
+            and self.x == other.x
+            and self.y == other.y
+        )
+\end{codebox}
+
+现在，两个看起来等价的 \texttt{Point} 对象也会在 \texttt{==} 运算符下被视为等价：
+
+\begin{codebox}[python]
+point4 = Point("A", 5, 10)
+point5 = Point("A", 5, 10)
+assert point4 == point5
+\end{codebox}
+
+然而，即便有了这些新的等价对象，之前那次字典查找仍然会失败：
+
+\begin{codebox}[python]
+other_charges = {
+    point4: 1.5,
+}
+other_charges[point5]
+>>>
+Traceback ...
+TypeError: unhashable type: 'Point'
+\end{codebox}
+
+问题在于，\texttt{Point} 类没有实现 \texttt{\_\_hash\_\_} 特殊方法（special method）。Python 的字典类型实现依赖于 \texttt{\_\_hash\_\_} 方法返回的整数值来维护其内部查找表。为了让字典正常工作，这个哈希（hash）值对于每个对象必须稳定不变，并且对等价对象必须相同。下面我把对象的属性放进一个元组（tuple）中，再传给内置函数 \texttt{hash} 来实现 \texttt{\_\_hash\_\_} 方法：
+
+\begin{codebox}[python]
+class Point:
+    ...
+    def __hash__(self):
+        return hash((self.name, self.x, self.y))
+\end{codebox}
+
+现在字典查找可以按照预期工作了：
+
+\begin{codebox}[python]
+point6 = Point("A", 5, 10)
+point7 = Point("A", 5, 10)
+more_charges = {
+    point6: 1.5,
+}
+value = more_charges[point7]
+assert value == 1.5
+\end{codebox}
+
+有了 \texttt{dataclasses}（数据类），要把一个不可变对象用作字典键就完全不需要这些麻烦。当你给 \texttt{dataclass}（数据类）装饰器提供 \texttt{frozen} 标志时，所有这些行为（例如 \texttt{\_\_eq\_\_}、\texttt{\_\_hash\_\_}）都会自动获得：
+
+\begin{codebox}[python]
+point8 = DataclassImmutablePoint("A", 5, 10)
+point9 = DataclassImmutablePoint("A", 5, 10)
+easy_charges = {
+    point8: 1.5,
+}
+assert easy_charges[point9] == 1.5
+\end{codebox}
+
+这些不可变对象也可以用作集合中的元素，并且会正确地去重：
+
+\begin{codebox}[python]
+my_set = {point8, point9}
+assert my_set == {point8}
+\end{codebox}
+
+\texttt{namedtuple} 又如何呢？
+
+在 \texttt{dataclasses}（数据类）被加入 Python 标准库（3.7 版）之前，创建不可变对象的一个不错选择是内置模块 \texttt{collections} 中的 \texttt{namedtuple} 函数。\texttt{namedtuple} 提供了与 \texttt{dataclass}（数据类）装饰器使用 \texttt{frozen} 标志时许多相同的好处，包括：
+
+\begin{itemize}
+\item 使用位置参数或关键字参数构造对象，当属性未指定时提供默认值。
+\item 自动定义面向对象的特殊方法（例如 \texttt{\_\_init\_\_}、\texttt{\_\_repr\_\_}、\texttt{\_\_eq\_\_}、\texttt{\_\_hash\_\_}、\texttt{\_\_lt\_\_}）。
+\item 内置的辅助方法 \texttt{\_replace} 与 \texttt{\_dict}，以及通过 \texttt{\_fields} 和 \texttt{\_field\_defaults} 类属性进行运行时内省。
+\item 当使用内置模块 \texttt{typing} 中的 \texttt{NamedTuple} 类时，支持静态类型检查。
+\item 通过避免使用 \texttt{\_\_dict\_\_} 实例字典来降低内存占用（即类似于使用带 \texttt{slots=True} 的 \texttt{dataclasses}）。
+\end{itemize}
+
+此外，\texttt{namedtuple} 的所有字段都可以通过位置索引访问，这对于包装顺序型数据结构（比如来自 CSV（逗号分隔值）文件的行，或者数据库查询结果中的行）来说非常理想——而使用 \texttt{dataclass}（数据类）时，你必须调用 \texttt{\_astuple} 方法。然而，\texttt{namedtuple} 的顺序特性可能导致非预期的使用方式（即数值索引与迭代），从而引发缺陷，并使日后难以迁移到标准类，对于外部 API（参见 Item 119（"使用包来组织模块并提供稳定的 API"））尤其如此。如果你的数据结构是顺序型的，那么 \texttt{namedtuple} 或许是个不错的选择；否则，最好选用 \texttt{dataclasses} 或标准类（参见 Item 65（"考虑用类体的定义顺序确立属性间的关系"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 使用不可变对象的函数式风格代码，通常比会修改状态并引发副作用的命令式风格代码更健壮。
+\item 创建自己的不可变对象最简单的方法，就是使用 \texttt{dataclasses}（数据类）内置模块；只需在定义类时应用 \texttt{dataclass}（数据类）装饰器，并传入 \texttt{frozen=True} 参数。
+\item \texttt{dataclasses} 模块中的 \texttt{replace} 辅助函数，让你可以创建部分属性被修改的不可变对象副本，从而更轻松地编写函数式风格代码。
+\item 用 \texttt{dataclass}（数据类）创建的不可变对象可以按值比较等价性，并且拥有稳定的哈希（hash）值，这使得它们能够用作字典的键和集合中的元素。
+\end{itemize}
+
+\section{Item 57: 从 collections.abc 的类继承以定义自定义容器类型}
+
+Python 编程的很大一部分，是定义包含数据的类，并描述这些对象之间如何相互关联。每个 Python 类在某种意义上是容器，把属性与功能封装在一起。Python 还提供了用于管理数据的内置容器类型：列表（list）、元组（tuple）、集合（set）和字典（dict）。当你为序列（sequence）这类简单场景设计类时，自然会想要直接继承 Python 内置的 \texttt{list} 类型。例如，假设我想创建自己的自定义 \texttt{list} 类型，并额外提供用于统计成员出现频率的方法：
+
+\begin{codebox}[python]
+class FrequencyList(list):
+    def __init__(self, members):
+        super().__init__(members)
+    def frequency(self):
+        counts = {}
+        for item in self:
+            counts[item] = counts.get(item, 0) + 1
+        return counts
+\end{codebox}
+
+通过继承 \texttt{list}，我获得了 \texttt{list} 的全部标准功能，也保留了所有 Python 程序员都熟悉的语义。我还可以定义额外的方法，来提供所需的任何自定义行为：
+
+\begin{codebox}[python]
+foo = FrequencyList(["a", "b", "a", "c", "b", "a", "d"])
+print("Length is", len(foo))
+foo.pop()  # 移除 "d"
+print("After pop:", repr(foo))
+print("Frequency:", foo.frequency())
+>>>
+Length is 7
+After pop: ['a', 'b', 'a', 'c', 'b', 'a']
+Frequency: {'a': 3, 'b': 2, 'c': 1}
+\end{codebox}
+
+现在，假设我需要定义一个用起来像列表、支持按索引访问，却又不是 \texttt{list} 子类的对象。例如，假设我想为一个二叉树（binary tree）类提供序列语义（类似 \texttt{list} 或 \texttt{tuple}；背景可参见 Item 14「学会如何对序列切片」）：
+
+\begin{codebox}[python]
+class BinaryNode:
+    def __init__(self, value, left=None, right=None):
+        self.value = value
+        self.left = left
+        self.right = right
+\end{codebox}
+
+如何让这个类表现得像序列类型？Python 用具有特殊名称的实例方法来实现容器行为。当你按索引访问序列中的元素时：
+
+\begin{codebox}[python]
+bar = [1, 2, 3]
+bar[0]
+\end{codebox}
+
+它会被解释为：
+
+\begin{codebox}[python]
+bar.__getitem__(0)
+\end{codebox}
+
+为了让 \texttt{BinaryNode} 类表现得像序列，你可以提供一个自定义的 \texttt{\_\_getitem\_\_} 实现（常被念作 ``dunder getitem''，即 ``double underscore getitem'' 的缩写），它以深度优先方式遍历对象树：
+
+\begin{codebox}[python]
+class IndexableNode(BinaryNode):
+    def _traverse(self):
+        if self.left is not None:
+            yield from self.left._traverse()
+        yield self
+        if self.right is not None:
+            yield from self.right._traverse()
+    def __getitem__(self, index):
+        for i, item in enumerate(self._traverse()):
+            if i == index:
+                return item.value
+        raise IndexError(f"Index {index} is out of range")
+\end{codebox}
+
+这里我用普通的对象初始化方式构建一棵二叉树：
+
+\begin{codebox}[python]
+tree = IndexableNode(
+    10,
+    left=IndexableNode(
+        5,
+        left=IndexableNode(2),
+        right=IndexableNode(6, right=IndexableNode(7)),
+    ),
+    right=IndexableNode(15, left=IndexableNode(11)),
+)
+\end{codebox}
+
+但除了用 \texttt{left} 和 \texttt{right} 属性遍历树之外，我还可以像列表一样访问它：
+
+\begin{codebox}[python]
+print("LRR is", tree.left.right.right.value)
+print("Index 0 is", tree[0])
+print("Index 1 is", tree[1])
+print("11 in the tree?", 11 in tree)
+print("17 in the tree?", 17 in tree)
+print("Tree is", list(tree))
+>>>
+LRR is 7
+Index 0 is 2
+Index 1 is 5
+11 in the tree? True
+17 in the tree? False
+Tree is [2, 5, 6, 7, 10, 11, 15]
+\end{codebox}
+
+问题在于，仅仅实现 \texttt{\_\_getitem\_\_} 并不足以提供 Python 期望一个 \texttt{list} 实例所具备的全部序列语义：
+
+\begin{codebox}[python]
+len(tree)
+>>>
+Traceback ...
+TypeError: object of type 'IndexableNode' has no len()
+\end{codebox}
+
+\texttt{len} 这个内置函数需要另一个特殊方法 \texttt{\_\_len\_\_}，要成为自定义序列类型就必须实现它：
+
+\begin{codebox}[python]
+class SequenceNode(IndexableNode):
+    def __len__(self):
+        count = 0
+        for _ in self._traverse():
+            count += 1
+        return count
+tree = SequenceNode(
+    10,
+    left=SequenceNode(
+        5,
+        left=SequenceNode(2),
+        right=SequenceNode(6, right=SequenceNode(7)),
+    ),
+    right=SequenceNode(15, left=SequenceNode(11)),
+)
+print("Tree length is", len(tree))
+>>>
+Tree length is 7
+\end{codebox}
+
+遗憾的是，这仍然不足以让该类成为完全合法的序列。序列（如 \texttt{list} 或 \texttt{tuple}）上程序员期望看到的 \texttt{count} 和 \texttt{index} 方法也同样缺失。事实证明，定义自己的容器类型远比看上去困难。
+
+为了避免在整个 Python 世界中遭遇这种困难，内置模块 \texttt{collections.abc} 定义了一组抽象基类（abstract base class），为每个容器类型提供全部典型方法。当你继承这些抽象基类却忘记实现所需的方法时，该模块会告诉你出了问题：
+
+\begin{codebox}[python]
+from collections.abc import Sequence
+class BadType(Sequence):
+    pass
+foo = BadType()
+>>>
+Traceback ...
+TypeError: Can't instantiate abstract class BadType without an
+implementation for abstract methods '__getitem__', '__len__'
+\end{codebox}
+
+当你实现了 \texttt{collections.abc} 中某个抽象基类所要求的所有方法（就像上面我对 \texttt{SequenceNode} 做的那样），它会免费提供 \texttt{index}、\texttt{count} 等全部附加方法：
+
+\begin{codebox}[python]
+class BetterNode(SequenceNode, Sequence):
+    pass
+tree = BetterNode(
+    10,
+    left=BetterNode(
+        5,
+        left=BetterNode(2),
+        right=BetterNode(6, right=BetterNode(7)),
+    ),
+    right=BetterNode(15, left=BetterNode(11)),
+)
+print("Index of 7 is", tree.index(7))
+print("Count of 10 is", tree.count(10))
+>>>
+Index of 7 is 3
+Count of 10 is 1
+\end{codebox}
+
+对于更复杂的容器类型，比如 \texttt{Set} 和 \texttt{MutableMapping}，使用这些抽象基类带来的好处更加明显，因为它们拥有大量需要实现的特殊方法，才能符合 Python 的约定。
+
+除了 \texttt{collections.abc} 模块，Python 还使用多种特殊方法进行对象比较和排序，容器类和非容器类都可能需要提供它们（示例可参见 Item 104（"学会使用 \texttt{heapq} 实现优先队列"）和 Item 51（"优先用 \texttt{dataclasses} 定义轻量类"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 对于简单场景，直接继承 Python 的容器类型（如 \texttt{list} 或 \texttt{dict}）来利用它们的基础行为是没问题的。
+\item 当不从内置类型继承时，要当心正确实现自定义容器类型所需的大量方法。
+\item 为确保你的自定义容器类符合所需的行为，应让它们继承 \texttt{collections.abc} 中定义的接口。
+\end{itemize}

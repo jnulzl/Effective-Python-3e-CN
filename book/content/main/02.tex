@@ -1,0 +1,1328 @@
+Python 最初是作为一门脚本语言流行起来的，用于编排命令行工具并处理输入与输出数据。借助针对字符串与序列处理的内置语法、方法和模块，Python 成为传统 shell 及其他常见脚本语言（如 Perl）之外一个有吸引力的替代选择。此后，Python 持续向邻近领域扩展，成为解析文本、生成结构化数据、检查文件格式、分析日志等任务的理想编程语言。
+
+通过使用 \texttt{bytes}（字节串）与 \texttt{str}（字符串）类型，Python 程序能够对接人类语言文本、操作底层的二进制数据格式，并执行输入/输出（I/O）操作、与外部世界通信。Python 对这些字符类型、列表（list）及其他类型做了抽象，为索引、取子序列等操作提供统一的接口。这些能力如此基础，以至于你几乎会在每个程序中见到它们。
+
+\section{Item 10: 了解 bytes 与 str 的区别}
+
+在 Python 中，有两种类型用于表示字符数据序列：\texttt{bytes}（字节串）和 \texttt{str}（字符串）。\texttt{bytes} 的实例包含原始的、无符号的 8 位值（通常以 ASCII 编码显示）：
+
+\begin{codebox}[python]
+a = b"h\x65llo"
+print(type(a))
+print(list(a))
+print(a)
+>>>
+<class 'bytes'>
+[104, 101, 108, 108, 111]
+b'hello'
+\end{codebox}
+
+\texttt{str} 的实例包含表示人类语言文本字符的 Unicode 码点：
+
+\begin{codebox}[python]
+a = "a\u0300 propos"
+print(type(a))
+print(list(a))
+print(a)
+>>>
+<class 'str'>
+['a', '`', ' ', 'p', 'r', 'o', 'p', 'o', 's']
+à propos
+\end{codebox}
+
+重要的是，\texttt{str} 实例没有关联的二进制编码，\texttt{bytes} 实例也没有关联的文本编码。要将 Unicode 数据转换为二进制数据，必须调用 \texttt{str} 的 \texttt{encode} 方法。要将二进制数据转换为 Unicode 数据，必须调用 \texttt{bytes} 的 \texttt{decode} 方法。你可以显式指定这些方法要使用的编码，也可以接受系统默认值——通常是 UTF-8（但并不总是如此，稍后你就会看到）。
+
+在编写 Python 程序时，重要的是要在接口的最外层边界处对 Unicode 数据进行编码和解码；这种方法常被称为「Unicode 三明治（Unicode sandwich）」。程序的核心应当使用包含 Unicode 数据的 \texttt{str} 类型，并且不应假定任何关于字符编码的内容。这种设置让你能够非常宽容地接受各种替代文本编码（如 Latin-1、Shift JIS 和 Big5），同时对输出文本编码保持严格（理想情况下为 UTF-8）。
+
+字符数据类型之间的这种区分，导致 Python 代码中出现了两种常见情形：
+
+\begin{itemize}
+\item 你想操作包含 UTF-8 编码字符串（或某种其他编码）的原始 8 位序列。
+\item 你想操作没有特定编码的 Unicode 字符串。
+\end{itemize}
+
+你常常需要两个辅助函数，在这些情况之间转换，并确保输入值的类型符合代码的预期。
+
+第一个函数接受 \texttt{bytes} 或 \texttt{str} 实例，并始终返回一个 \texttt{str}：
+
+\begin{codebox}[python]
+def to_str(bytes_or_str):
+    if isinstance(bytes_or_str, bytes):
+        value = bytes_or_str.decode("utf-8")
+    else:
+        value = bytes_or_str
+    return value  # str 类型的实例
+print(repr(to_str(b"foo")))
+print(repr(to_str("bar")))
+>>>
+'foo'
+'bar'
+\end{codebox}
+
+第二个函数接受 \texttt{bytes} 或 \texttt{str} 实例，并始终返回一个 \texttt{bytes}：
+
+\begin{codebox}[python]
+def to_bytes(bytes_or_str):
+    if isinstance(bytes_or_str, str):
+        value = bytes_or_str.encode("utf-8")
+    else:
+        value = bytes_or_str
+    return value  # bytes 类型的实例
+print(repr(to_bytes(b"foo")))
+print(repr(to_bytes("bar")))
+\end{codebox}
+
+在 Python 中处理原始 8 位值和 Unicode 字符串时，有两个常见的陷阱。
+
+第一个问题是，\texttt{bytes} 和 \texttt{str} 看起来工作方式相同，但它们的实例彼此并不兼容，因此你必须明确自己传递的是哪种字符序列类型。
+
+借助 \texttt{+} 运算符，可以分别将 \texttt{bytes} 加到 \texttt{bytes} 上、将 \texttt{str} 加到 \texttt{str} 上：
+
+\begin{codebox}[python]
+print(b"one" + b"two")
+print("one" + "two")
+>>>
+b'onetwo'
+onetwo
+\end{codebox}
+
+但你不能把 \texttt{str} 实例加到 \texttt{bytes} 实例上：
+
+\begin{codebox}[python]
+b"one" + "two"
+>>>
+Traceback ...
+TypeError: can't concat str to bytes
+\end{codebox}
+
+你也不能把 \texttt{bytes} 实例加到 \texttt{str} 实例上：
+
+\begin{codebox}[python]
+"one" + b"two"
+>>>
+Traceback ...
+TypeError: can only concatenate str (not "bytes") to str
+\end{codebox}
+
+借助二元运算符，可以分别将 \texttt{bytes} 与 \texttt{bytes} 比较、将 \texttt{str} 与 \texttt{str} 比较：
+
+\begin{codebox}[python]
+assert b"red" > b"blue"
+assert "red" > "blue"
+\end{codebox}
+
+但你不能将 \texttt{str} 实例与 \texttt{bytes} 实例比较：
+
+\begin{codebox}[python]
+assert "red" > b"blue"
+>>>
+Traceback ...
+TypeError: '>' not supported between instances of 'str' and
+'bytes'
+\end{codebox}
+
+你也不能将 \texttt{bytes} 实例与 \texttt{str} 实例比较：
+
+\begin{codebox}[python]
+assert b"blue" < "red"
+>>>
+Traceback ...
+TypeError: '<' not supported between instances of 'bytes' and
+'str'
+\end{codebox}
+
+对 \texttt{bytes} 与 \texttt{str} 实例进行相等性比较，结果将始终求值为 \texttt{False}，即使它们包含的字符完全相同（此处为 ASCII 编码的 \texttt{"foo"}）：
+
+\begin{codebox}[python]
+print(b"foo" == "foo")
+>>>
+False
+\end{codebox}
+
+\texttt{\%} 运算符对每种类型都可与格式字符串配合使用（背景参见 Item 11：优先使用插值 f 字符串，而非 C 风格格式字符串与 \texttt{str.format}）：
+
+\begin{codebox}[python]
+blue_bytes = b"blue"
+blue_str = "blue"
+print(b"red %s" % blue_bytes)
+print("red %s" % blue_str)
+>>>
+b'red blue'
+red blue
+\end{codebox}
+
+但你不能把 \texttt{str} 实例传给 \texttt{bytes} 格式字符串，因为 Python 不知道该使用哪种二进制文本编码：
+
+\begin{codebox}[python]
+print(b"red %s" % blue_str)
+>>>
+Traceback ...
+TypeError: %b requires a bytes-like object, or an object that
+implements __bytes__, not 'str'
+\end{codebox}
+
+不过，你可以借助 \texttt{\%} 运算符把一个 \texttt{bytes} 实例传给 \texttt{str} 格式字符串，也可以在插值格式字符串中使用 \texttt{bytes} 实例，但结果并非你所期望：
+
+\begin{codebox}[python]
+print("red %s" % blue_bytes)
+print(f"red {blue_bytes}")
+>>>
+red b'blue'
+red b'blue'
+\end{codebox}
+
+在这些情况下，代码实际上会调用 \texttt{bytes} 实例上的 \texttt{\_\_repr\_\_} 特殊方法（参见 Item 12：打印对象时理解 \texttt{repr} 与 \texttt{str} 的区别），并将结果替换到 \texttt{\%s} 或 \texttt{\{blue\_bytes\}} 的位置，这就是为什么输出中会出现 \texttt{b"blue"} 字面量。
+
+第二个陷阱是，涉及文件句柄（由内置函数 \texttt{open} 返回）的操作默认要求使用 Unicode 字符串，而非原始 \texttt{bytes}。这会导致令人意外的失败，尤其是对于习惯了 Python 2 的程序员。例如，假设我想向文件写入一些二进制数据。这段看似简单的代码会出错：
+
+\begin{codebox}[python]
+with open("data.bin", "w") as f:
+    f.write(b"\xf1\xf2\xf3\xf4\xf5")
+>>>
+Traceback ...
+TypeError: write() argument must be str, not bytes
+\end{codebox}
+
+产生该异常的原因是，文件是以写文本模式（\texttt{"w"}）而非写二进制模式（\texttt{"wb"}）打开的。当文件处于文本模式时，\texttt{write} 操作期望的是包含 Unicode 数据的 \texttt{str} 实例，而不是包含二进制数据的 \texttt{bytes} 实例。这里，我通过将打开模式改为 \texttt{"wb"} 来修复它：
+
+\begin{codebox}[python]
+with open("data.bin", "wb") as f:
+    f.write(b"\xf1\xf2\xf3\xf4\xf5")
+\end{codebox}
+
+从文件读取数据时也存在类似问题。例如，这里我尝试读取上面写入的那个二进制文件：
+
+\begin{codebox}[python]
+with open("data.bin", "r") as f:
+    data = f.read()
+>>>
+Traceback ...
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf1 in
+position 0: invalid continuation byte
+\end{codebox}
+
+这会失败，是因为文件是以读文本模式（\texttt{"r"}）而非读二进制模式（\texttt{"rb"}）打开的。当句柄处于文本模式时，它会使用系统的默认文本编码，借助 \texttt{bytes.decode}（用于读取）和 \texttt{str.encode}（用于写入）方法来解释二进制数据。在大多数系统上，默认编码是 UTF-8，它无法接受二进制数据 \texttt{b"\textbackslash xf1\textbackslash xf2\textbackslash xf3\textbackslash xf4\textbackslash xf5"}，从而引发了上面的错误。
+
+这里，我通过将打开模式改为 \texttt{"rb"} 来解决这个问题：
+
+\begin{codebox}[python]
+with open("data.bin", "rb") as f:
+    data = f.read()
+assert data == b"\xf1\xf2\xf3\xf4\xf5"
+\end{codebox}
+
+另外，我也可以显式指定 \texttt{open} 函数的 \texttt{encoding} 参数，以确保自己不会被任何平台相关的行为所惊讶。例如，这里假设文件中的二进制数据实际上本应是一个以 \texttt{"cp1252"}（一种遗留的 Windows 编码）编码的字符串：
+
+\begin{codebox}[python]
+with open("data.bin", "r", encoding="cp1252") as f:
+    data = f.read()
+assert data == "ñòóôõ"
+\end{codebox}
+
+异常消失了，而且对文件内容的字符串解释，与读取原始 \texttt{bytes} 时返回的结果大不相同。这里的教训是，你应该检查系统上的默认编码（使用 \texttt{python3 -c 'import locale; print(locale.getpreferredencoding())'}），以了解它与你的预期有何不同。如有疑问，你应该显式地向 \texttt{open} 传入 \texttt{encoding} 参数。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{bytes} 包含 8 位值序列，\texttt{str} 包含 Unicode 码点序列。
+\item 使用辅助函数，确保你操作的输入是你所期望的字符序列类型（8 位值、UTF-8 编码的字符串、Unicode 码点等）。
+\item \texttt{bytes} 与 \texttt{str} 的实例不能与运算符（如 \texttt{>}、\texttt{==}、\texttt{+} 和 \texttt{\%}）一起使用。
+\item 如果你想从文件读取或向文件写入二进制数据，务必始终以二进制模式（如 \texttt{"rb"} 或 \texttt{"wb"}）打开文件。
+\item 如果你想从文件读取或向文件写入 Unicode 数据，要留意系统的默认文本编码。显式地向 \texttt{open} 传入 \texttt{encoding} 参数，以避免意外。
+\end{itemize}
+
+\section{Item 11: 优先使用插值 f 字符串，而非 C 风格格式字符串与 str.format}
+
+字符串（string）在 Python 代码库（codebase）中随处可见。它们用于在用户界面和命令行工具中渲染消息，用于将数据写入文件和套接字（socket），用于在异常（Exception）详情中说明出了什么问题（参见 Item 88（"显式串联异常以厘清回溯"）），也用于日志记录与调试（参见 Item 12（"打印对象时理解 repr 与 str 的区别"））。所谓格式化（formatting），就是把预定义的文本与数据值组合成一条人类可读、以字符串形式存储的消息的过程。Python 语言与标准库（standard library）内置了四种不同的字符串格式化方式。其中除最后一种（将在本条末尾介绍）之外，其余都有严重缺陷，我们应当理解并避免。
+
+\subsection{C 风格格式化}
+
+在 Python 中，格式化字符串最常见的方式是使用 \texttt{\%} 格式化运算符。格式字符串（format string）中，运算符左侧提供预定义的文本模板；要插入模板的值作为单个值，或以多个值组成的元组（tuple）形式，放在格式化运算符右侧。例如，下面我用 \texttt{\%} 运算符把难以阅读的二进制与十六进制值转换为整数（integer）字符串：
+
+\begin{codebox}[python]
+a = 0b10111011
+b = 0xC5F
+print("Binary is %d, hex is %d" % (a, b))
+>>>
+Binary is 187, hex is 3167
+\end{codebox}
+
+格式字符串使用格式说明符（format specifier，如 \texttt{\%d}）作为占位符（placeholder），由格式化表达式右侧的值替换。格式说明符的语法源自 C 语言的 \texttt{printf} 函数，并为 Python（以及其他编程语言）所继承。Python 支持 \texttt{printf} 的全部常见选项，例如 \texttt{\%s}、\texttt{\%x} 和 \texttt{\%f} 等格式说明符，还能控制小数位数、填充、补白与对齐（alignment）。
+
+许多刚接触 Python 的程序员都会从 C 风格格式字符串起步，因为它们熟悉且易于使用。
+
+Python 中的 C 风格格式字符串存在四个问题。
+
+第一个问题是：如果你改变了格式化表达式右侧元组中数据值的类型或顺序，就可能因类型转换不兼容而报错。例如，下面这个简单的格式化表达式可以正常工作：
+
+\begin{codebox}[python]
+key = "my_var"
+value = 1.234
+formatted = "%-10s = %.2f" % (key, value)
+print(formatted)
+>>>
+my_var     = 1.23
+\end{codebox}
+
+但如果把 \texttt{key} 和 \texttt{value} 互换，运行时就会抛出异常（exception）：
+
+\begin{codebox}[python]
+reordered_tuple = "%-10s = %.2f" % (value, key)
+>>>
+Traceback ...
+TypeError: must be real number, not str
+\end{codebox}
+
+若右侧参数保持原来的顺序、只改格式字符串，也会得到同样的错误：
+
+\begin{codebox}[python]
+reordered_string = "%.2f = %-10s" % (key, value)
+>>>
+Traceback ...
+TypeError: must be real number, not str
+\end{codebox}
+
+为避免这个陷阱（gotcha），你需要不断确认 \texttt{\%} 运算符两侧保持一致；这个过程容易出错，因为每次改动都得手动核对。
+
+C 风格格式化表达式的第二个问题是：当你需要在把值格式化成字符串之前做一点小修改时，代码会变得难以阅读——而这又是一种极常见的需求。下面我列出厨房储藏室（pantry）的物品，且不对值做任何内联修改：
+
+\begin{codebox}[python]
+pantry = [
+    ("avocados", 1.25),
+    ("bananas", 2.5),
+    ("cherries", 15),
+]
+for i, (item, count) in enumerate(pantry):
+    print("#%d: %-10s = %.2f" % (i, item, count))
+>>>
+#0: avocados   = 1.25
+#1: bananas    = 2.50
+#2: cherries   = 15.00
+\end{codebox}
+
+接下来，我对要格式化的值做几处修改，让打印出的消息更有用。这导致格式化表达式里的元组变得很长，必须拆成多行，从而损害了可读性：
+
+\begin{codebox}[python]
+for i, (item, count) in enumerate(pantry):
+    print(
+        "#%d: %-10s = %d"
+        % (
+            i + 1,
+            item.title(),
+            round(count),
+        )
+    )
+>>>
+#1: Avocados   = 1
+#2: Bananas    = 2
+#3: Cherries   = 15
+\end{codebox}
+
+格式化表达式的第三个问题是：如果你想在格式字符串里多次使用同一个值，就必须在右侧元组里重复它：
+
+\begin{codebox}[python]
+template = "%s loves food. See %s cook."
+name = "Max"
+formatted = template % (name, name)
+print(formatted)
+>>>
+Max loves food. See Max cook.
+\end{codebox}
+
+如果你还要对正在格式化的值重复做小修改，这就格外烦人且容易出错。例如，下面我对 \texttt{name} 的一处引用调用了 \texttt{title()} 方法，另一处却没有，结果输出前后不一致：
+
+\begin{codebox}[python]
+name = "brad"
+formatted = template % (name.title(), name)
+print(formatted)
+>>>
+Brad loves food. See brad cook.
+\end{codebox}
+
+Python 的 \texttt{\%} 运算符能在一定程度上缓解这些问题，因为它还能用字典（dictionary）而非元组来做格式化。字典的键会与同名的格式说明符（如 \texttt{\%(key)s}）相匹配。下面我利用这一功能调整格式化表达式右侧值的顺序，而输出不受影响，从而解决了上面的问题 \#1：
+
+\begin{codebox}[python]
+key = "my_var"
+value = 1.234
+old_way = "%-10s = %.2f" % (key, value)
+new_way = "%(key)-10s = %(value).2f" % {
+    "key": key,  # 键在前
+    "value": value,
+}
+reordered = "%(key)-10s = %(value).2f" % {
+    "value": value,
+    "key": key,  # 键在后
+}
+assert old_way == new_way == reordered
+\end{codebox}
+
+在格式化表达式中使用字典同样能解决上面的问题 \#3：多个格式说明符可以引用同一个值，因此无需把该值提供多次：
+
+\begin{codebox}[python]
+name = "Max"
+template = "%s loves food. See %s cook."
+before = template % (name, name)   # 元组
+template = "%(name)s loves food. See %(name)s cook."
+after = template % {"name": name}  # 字典
+assert before == after
+\end{codebox}
+
+然而，字典格式字符串又会引入并放大其他问题。就上面的问题 \#2（在格式化前对值做小修改）而言，由于右侧出现了字典键和冒号运算符，格式化表达式变得更长、视觉上更嘈杂。下面我分别用字典和不用字典渲染同一个字符串，以展示这个问题：
+
+\begin{codebox}[python]
+for i, (item, count) in enumerate(pantry):
+    before = "#%d: %-10s = %d" % (
+        i + 1,
+        item.title(),
+        round(count),
+    )
+    after = "#%(loop)d: %(item)-10s = %(count)d" % {
+        "loop": i + 1,
+        "item": item.title(),
+        "count": round(count),
+    }
+    assert before == after
+\end{codebox}
+
+在格式化表达式中使用字典还会增加冗余度，这正是 Python 中 C 风格格式化表达式的问题 \#4。
+
+每个键至少要写两遍——一遍在格式说明符里，一遍作为字典的键，如果存放字典值的变量名不同，可能还要再写一遍：
+
+\begin{codebox}[python]
+soup = "lentil"
+formatted = "Today's soup is %(soup)s." % {"soup": soup}
+print(formatted)
+>>>
+Today's soup is lentil.
+\end{codebox}
+
+除了重复字符之外，这种冗余还让使用字典的格式化表达式变得很长。这些表达式常常不得不跨越多行，格式字符串要跨多行拼接，字典赋值则每个要用的值占一行：
+
+\begin{codebox}[python]
+menu = {
+    "soup": "lentil",
+    "oyster": "kumamoto",
+    "special": "schnitzel",
+}
+template = (
+    "Today's soup is %(soup)s, "
+    "buy one get two %(oyster)s oysters, "
+    "and our special entrée is %(special)s."
+)
+formatted = template % menu
+print(formatted)
+>>>
+Today's soup is lentil, buy one get two kumamoto oysters, and
+our special entrée is schnitzel.
+\end{codebox}
+
+要弄清这个格式化表达式会产出什么，你的视线不得不在格式字符串各行与字典各行之间来回跳动。这种脱节让 bug 难以发现；如果在格式化前还要对其中某个值做小修改，可读性就更差了。
+
+一定有更好的办法。
+
+\subsection{format 内置函数与 str.format}
+
+Python 3 增加了对高级字符串格式化的支持，它比使用 \texttt{\%} 运算符的旧式 C 风格格式字符串更具表现力（expressive）。
+
+对于单个 Python 值，可以通过 \texttt{format} 内置函数来使用这一新功能。例如，下面我用到了一些新选项（\texttt{,} 表示千位分隔符，\texttt{\^{}} 表示居中）来格式化值：
+
+\begin{codebox}[python]
+a = 1234.5678
+formatted = format(a, ",.2f")
+print(formatted)
+b = "my string"
+formatted = format(b, "^20s")
+print("*", formatted, "*")
+>>>
+1,234.57
+*      my string       *
+\end{codebox}
+
+你也可以通过调用 \texttt{str} 类型的 \texttt{format} 新方法来一次性格式化多个值。你无需使用 \texttt{\%d} 这样的 C 风格格式说明符，而是用 \texttt{\{\}} 来指定占位符。默认情况下，格式字符串中的占位符会按出现顺序，被传给 \texttt{format} 方法对应的位置参数（positional argument）替换：
+
+\begin{codebox}[python]
+key = "my_var"
+value = 1.234
+formatted = "{} = {}".format(key, value)
+print(formatted)
+>>>
+my_var = 1.234
+\end{codebox}
+
+在每个占位符里，你还可以选择性地提供一个冒号，后接格式说明符，以定制值转换为字符串的方式（完整选项见 \texttt{https://docs.python.org/3/library/string.html\#format-specification-mini-language}）：
+
+\begin{codebox}[python]
+formatted = "{:<10} = {:.2f}".format(key, value)
+print(formatted)
+>>>
+my_var     = 1.23
+\end{codebox}
+
+可以这样理解其工作原理：格式说明符会连同值一起传给 \texttt{format} 内置函数（上例中即 \texttt{format(value, ".2f")}）。该函数调用的结果，就是替换整个格式化字符串中占位符的内容。你还可以通过 \texttt{\_\_format\_\_} 特殊方法（special method）为每个类定制格式化行为。
+
+使用 \texttt{str.format} 时另一个要留心的细节是花括号（\texttt{\{}）的转义。你需要把它们写两遍（\texttt{\{\{}），以免被误当作占位符（正像在 C 风格格式字符串里需要把 \texttt{\%} 字符写两遍来正确转义一样）：
+
+\begin{codebox}[python]
+print("%.2f%%" % 12.5)
+print("{} replaces {{}}".format(1.23))
+>>>
+12.50%
+1.23 replaces {}
+\end{codebox}
+
+在花括号内，你还可以指定传给 \texttt{format} 方法的某个参数的位置索引（index），用于替换占位符。这样就能改动格式字符串、调整输出顺序，而无需同时修改格式化表达式的右侧，从而解决了上面的问题 \#1：
+
+\begin{codebox}[python]
+formatted = "{1} = {0}".format(key, value)
+print(formatted)
+>>>
+1.234 = my_var
+\end{codebox}
+
+同一个位置索引也可以在格式字符串中被引用多次，而无需把该值向 \texttt{format} 方法传多次，这就解决了上面的问题 \#3：
+
+\begin{codebox}[python]
+formatted = "{0} loves food. See {0} cook.".format(name)
+print(formatted)
+>>>
+Max loves food. See Max cook.
+\end{codebox}
+
+遗憾的是，新的 \texttt{format} 方法对上面的问题 \#2 毫无帮助；当你需要在格式化前对值做小修改时，代码依然难读。新旧两种写法在可读性上差别不大，都同样嘈杂：
+
+\begin{codebox}[python]
+for i, (item, count) in enumerate(pantry):
+    old_style = "#%d: %-10s = %d" % (
+        i + 1,
+        item.title(),
+        round(count),
+    )
+    new_style = "#{}: {:<10s} = {}".format(
+        i + 1,
+        item.title(),
+        round(count),
+    )
+    assert old_style == new_style
+\end{codebox}
+
+\texttt{str.format} 方法还有更进阶的说明符选项，例如在占位符中组合使用字典键与列表索引，以及把值强制转换为 Unicode 与 \texttt{repr} 字符串：
+
+\begin{codebox}[python]
+formatted = "First letter is {menu[oyster][0]!r}".format(menu=menu)
+print(formatted)
+>>>
+First letter is 'k'
+\end{codebox}
+
+但这些特性无助于减少上面问题 \#4 中重复键带来的冗余。例如，下面我把 C 风格格式化表达式里使用字典的写法，与向 \texttt{format} 方法传关键字参数（keyword argument）的新写法，在冗余度上做个对比：
+
+\begin{codebox}[python]
+old_template = (
+    "Today's soup is %(soup)s, "
+    "buy one get two %(oyster)s oysters, "
+    "and our special entrée is %(special)s."
+)
+old_formatted = old_template % {
+    "soup": "lentil",
+    "oyster": "kumamoto",
+    "special": "schnitzel",
+}
+new_template = (
+    "Today's soup is {soup}, "
+    "buy one get two {oyster} oysters, "
+    "and our special entrée is {special}."
+)
+new_formatted = new_template.format(
+    soup="lentil",
+    oyster="kumamoto",
+    special="schnitzel",
+)
+assert old_formatted == new_formatted
+\end{codebox}
+
+这种写法噪音略小，因为它去掉了字典里的一些引号以及格式说明符里的几个字符，但这并不足以令人称道。此外，在占位符中使用字典键和索引的进阶特性，只是 Python 表达式功能中极小的一个子集。这种表现力的缺失限制太大，以至于整体上削弱了 \texttt{str.format} 方法的价值。
+
+鉴于这些不足，以及 C 风格格式化表达式遗留的问题（上面的问题 \#2 与 \#4），我建议你在一般情况下避免使用 \texttt{str.format} 方法。了解格式说明符中用到的新迷你语言（mini-language，即冒号之后的全部内容），以及如何使用 \texttt{format} 内置函数，这很重要。但 \texttt{str.format} 方法的其余部分，应被视为一种历史遗存（historical artifact），用来帮你理解 Python 新的 f 字符串为何如此出色。
+
+\subsection{插值格式字符串}
+
+Python 3.6 加入了插值（interpolated）格式字符串——简称 f 字符串（f-string）——以一劳永逸地解决这些问题。这一新的语言语法要求你在格式字符串前加一个 \texttt{f} 字符作为前缀，这类似于字节串（byte string）以 \texttt{b} 字符为前缀、原始（raw，未转义）字符串以 \texttt{r} 字符为前缀。
+
+f 字符串把格式字符串的表现力发挥到了极致，它彻底消除了「提供待格式化的键与值」所带来的冗余，从而解决了上面的问题 \#4。它之所以能如此简洁，是因为允许你把当前 Python 作用域（scope）里的所有名字都当作格式化表达式的一部分来引用：
+
+\begin{codebox}[python]
+key = "my_var"
+value = 1.234
+formatted = f"{key} = {value}"
+print(formatted)
+>>>
+my_var = 1.234
+\end{codebox}
+
+\texttt{format} 内置迷你语言里的全部选项，在 f 字符串占位符的冒号之后都可用；把值强制转换为 Unicode 与 \texttt{repr} 字符串的能力同样可用，这与 \texttt{str.format} 方法类似（即通过 \texttt{!r} 与 \texttt{!s}）：
+
+\begin{codebox}[python]
+formatted = f"{key!r:<10} = {value:.2f}"
+print(formatted)
+>>>
+'my_var'   = 1.23
+\end{codebox}
+
+在任何情况下，用 f 字符串做格式化都比使用带 \texttt{\%} 运算符的 C 风格格式字符串以及 \texttt{str.format} 方法更简短。下面我把各种写法放在一起，按从短到长的顺序排列，并让赋值语句的左侧对齐，方便你比较：
+
+\begin{codebox}[python]
+f_string = f"{key:<10} = {value:.2f}"
+c_tuple  = "%-10s = %.2f" % (key, value)
+str_args = "{:<10} = {:.2f}".format(key, value)
+str_kw   = "{key:<10} = {value:.2f}".format(key=key,
+value=value)
+c_dict   = "%(key)-10s = %(value).2f" % {"key": key, "value":
+value}
+assert c_tuple == c_dict == f_string
+assert str_args == str_kw == f_string
+\end{codebox}
+
+f 字符串还允许你在占位符花括号里放入完整的 Python 表达式，从而用简洁的语法对正在格式化的值做小修改，解决了上面的问题 \#2。
+
+用 C 风格格式化和 \texttt{str.format} 方法需要多行才能写完的内容，现在可以轻松写在一行里：
+
+\begin{codebox}[python]
+for i, (item, count) in enumerate(pantry):
+    old_style = "#%d: %-10s = %d" % (
+        i + 1,
+        item.title(),
+        round(count),
+    )
+    new_style = "#{}: {:<10s} = {}".format(
+        i + 1,
+        item.title(),
+        round(count),
+    )
+    f_string = f"#{i+1}: {item.title():<10s} = {round(count)}"
+    assert old_style == new_style == f_string
+\end{codebox}
+
+或者，如果那样更清晰，你也可以依赖相邻字符串拼接（adjacent-string concatenation，参见 Item 13（"优先显式拼接字符串，而非隐式拼接，尤其在处理列表时"）），把 f 字符串拆成多行。尽管这比单行版本更长，但它仍比任何其他多行写法清晰得多：
+
+\begin{codebox}[python]
+for i, (item, count) in enumerate(pantry):
+    print(f"#{i+1}: "
+          f"{item.title():<10s} = "
+          f"{round(count)}")
+>>>
+#1: Avocados   = 1
+#2: Bananas    = 2
+#3: Cherries   = 15
+\end{codebox}
+
+Python 表达式还可以出现在格式说明符的选项里。例如，下面我不再把要打印的小数位数硬编码进格式字符串，而是用一个变量来参数化：
+
+\begin{codebox}[python]
+places = 3
+number = 1.23456
+print(f"My number is {number:.{places}f}")
+>>>
+My number is 1.235
+\end{codebox}
+
+f 字符串兼具表现力、简洁与清晰，使之成为 Python 程序员最佳的内置（built-in）选择。每当你需要把值格式化为字符串时，都应优先选用 f 字符串，而非其他方案。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 使用 \texttt{\%} 运算符的 C 风格格式字符串存在多种陷阱与冗余问题。
+\item \texttt{str.format} 方法在其格式说明符迷你语言中引入了一些有用的概念，但除此之外它重复了 C 风格格式字符串的错误，应当避免使用。
+\item f 字符串是一种把值格式化为字符串的新语法，它解决了 C 风格格式字符串最严重的问题。
+\item f 字符串简洁而强大，因为它允许把任意 Python 表达式直接嵌入格式说明符中。
+\end{itemize}
+
+\section{Item 12: 理解打印对象时 repr 与 str 的区别}
+
+当你调试 Python 程序时，使用 \texttt{print} 函数和格式字符串（见 Item 11（"优先使用插值 f 字符串而非 C 风格格式字符串与 \texttt{str.format}"）），或者通过 \texttt{logging} 内置模块输出，往往能让你走得很远。Python 对象的内部状态通常很容易通过普通的属性访问到（见 Item 55（"优先使用公开属性而非私有属性"））。你只需要调用 \texttt{print} 就能观察程序运行时的状态如何变化，并推断哪里出了问题（更进阶的方法见 Item 114（"考虑使用 \texttt{pdb} 进行交互式调试"））。
+
+\texttt{print} 函数会输出你所提供内容的、人类可读的字符串形式。例如，我可以把 \texttt{print} 用在一个基本字符串上，从而在不带两侧引号字符的情况下看到字符串的内容：
+
+\begin{codebox}[python]
+print("foo bar")
+>>>
+foo bar
+\end{codebox}
+
+这与下面所有这些替代写法效果相同：
+
+\begin{itemize}
+\item 在把值传给 \texttt{print} 之前先调用 \texttt{str} 函数
+\item 使用带 \texttt{\%} 运算符的 \texttt{"\%s"} 格式字符串
+\item 在 f 字符串中使用该值的默认格式化形式
+\item 调用 \texttt{format} 内置函数
+\item 显式调用 \texttt{\_\_format\_\_} 特殊方法
+\item 显式调用 \texttt{\_\_str\_\_} 特殊方法
+\end{itemize}
+
+这里我演示它们都会产生相同的输出：
+
+\begin{codebox}[python]
+my_value = "foo bar"
+print(str(my_value))
+print("%s" % my_value)
+print(f"{my_value}")
+print(format(my_value))
+print(my_value.__format__("s"))
+print(my_value.__str__())
+>>>
+foo bar
+foo bar
+foo bar
+foo bar
+foo bar
+foo bar
+\end{codebox}
+
+问题在于，一个值的人类可读字符串并不能清楚地表明该值的实际类型和具体构成。例如，注意在 \texttt{print} 的默认输出中，你无法区分数字 \texttt{5} 和字符串 \texttt{"5"} 的类型：
+
+\begin{codebox}[python]
+int_value = 5
+str_value = "5"
+print(int_value)
+print(str_value)
+print(f"Is {int_value} == {str_value}?")
+>>>
+5
+5
+Is 5 == 5?
+\end{codebox}
+
+如果你用 \texttt{print} 调试程序，这些类型差异就很重要。调试时你几乎总是希望看到某个对象（object）的 \texttt{repr} 版本。\texttt{repr} 内置函数返回一个对象的可打印表示，它应当是该对象最清晰易懂的字符串序列化形式。对于许多内置类型，\texttt{repr} 返回的字符串是一个合法的 Python 表达式：
+
+\begin{codebox}[python]
+a = "\x07"
+print(repr(a))
+>>>
+'\x07'
+\end{codebox}
+
+把 \texttt{repr} 返回的值传给 \texttt{eval} 内置函数，通常能得到与你开始时相同的 Python 对象：
+
+\begin{codebox}[python]
+b = eval(repr(a))
+assert a == b
+\end{codebox}
+
+当然，在实践中你应当极其谨慎地使用 \texttt{eval}（见 Item 91（"除非你在构建开发者工具，否则避免使用 \texttt{exec} 和 \texttt{eval}"））。
+
+当你用 \texttt{print} 调试时，应该在打印之前对值调用 \texttt{repr}，以确保任何类型差异都清晰可见：
+
+\begin{codebox}[python]
+print(repr(int_value))
+print(repr(str_value))
+>>>
+5
+'5'
+\end{codebox}
+
+这等价于使用带 \texttt{\%} 运算符的 \texttt{"\%r"} 格式字符串，或者使用带 \texttt{!r} 类型转换的 f 字符串：
+
+\begin{codebox}[python]
+print("Is %r == %r?" % (int_value, str_value))
+print(f"Is {int_value!r} == {str_value!r}?")
+>>>
+Is 5 == '5'?
+Is 5 == '5'?
+\end{codebox}
+
+当 \texttt{str} 内置函数接收到一个用户自定义类的实例时，它会先尝试调用 \texttt{\_\_str\_\_} 特殊方法。如果该方法未定义，它会回退去调用 \texttt{\_\_repr\_\_} 特殊方法。如果 \texttt{\_\_repr\_\_} 也没有被该类实现，那么调用会经过方法解析（见 Item 53（"使用 \texttt{super} 初始化父类"）），最终调用来自 \texttt{object} 父类的默认实现。遗憾的是，\texttt{object} 子类对 \texttt{repr} 的默认实现并没有特别大的帮助。例如，这里我定义了一个简单的类，然后打印它的一个实例，这最终会导致对 \texttt{object.\_\_repr\_\_} 的调用：
+
+\begin{codebox}[python]
+class OpaqueClass:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+obj = OpaqueClass(1, "foo")
+print(obj)
+>>>
+<__main__.OpaqueClass object at 0x1009be510>
+\end{codebox}
+
+这个输出无法传给 \texttt{eval} 函数，而且它也没有说明对象的实例字段。为了改进这一点，这里我定义了自身的 \texttt{\_\_repr\_\_} 特殊方法，它返回一个包含能够重新创建该对象的 Python 表达式的字符串（另一种定义 \texttt{\_\_repr\_\_} 的方法见 Item 51（"优先使用 \texttt{dataclasses} 定义轻量级类"））：
+
+\begin{codebox}[python]
+class BetterClass:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    def __repr__(self):
+        return f"BetterClass({self.x!r}, {self.y!r})"
+\end{codebox}
+
+现在 \texttt{repr} 的值要有用得多：
+
+\begin{codebox}[python]
+obj = BetterClass(2, "bar")
+print(obj)
+>>>
+BetterClass(2, 'bar')
+\end{codebox}
+
+在该类的实例上调用 \texttt{str} 会得到相同的结果，因为 \texttt{\_\_str\_\_} 特殊方法未被定义，导致 Python 回退到 \texttt{\_\_repr\_\_}：
+
+\begin{codebox}[python]
+print(str(obj))
+>>>
+BetterClass(2, 'bar')
+\end{codebox}
+
+要让 \texttt{str} 输出一种不同的人类的可读格式——例如，在某个 UI 元素中显示——我可以定义相应的 \texttt{\_\_str\_\_} 特殊方法：
+
+\begin{codebox}[python]
+class StringifiableBetterClass(BetterClass):
+    def __str__(self):
+        return f"({self.x}, {self.y})"
+\end{codebox}
+
+现在 \texttt{repr} 和 \texttt{str} 会针对不同用途返回不同的、人类可读的字符串：
+
+\begin{codebox}[python]
+obj2 = StringifiableBetterClass(2, "bar")
+print("Human readable:", obj2)
+print("Printable:     ", repr(obj2))
+>>>
+Human readable: (2, bar)
+Printable:      BetterClass(2, 'bar')
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 对内置 Python 类型调用 \texttt{print} 会生成值的人类可读字符串形式，这会隐藏类型信息。
+\item 对内置 Python 类型调用 \texttt{repr} 会生成包含值的可打印表示的字符串。\texttt{repr} 字符串通常可以传给 \texttt{eval} 内置函数以取回原始值。
+\item 格式字符串中的 \texttt{\%s} 会生成像 \texttt{str} 那样的人类可读字符串。\texttt{\%r} 会生成像 \texttt{repr} 那样的可打印字符串。f 字符串为替换文本表达式生成人类可读字符串，除非你指定 \texttt{!r} 转换后缀。
+\item 你可以在自己的类上定义 \texttt{\_\_repr\_\_} 和 \texttt{\_\_str\_\_} 特殊方法，以自定义实例的可打印表示和人类可读表示，这有助于调试，也能简化将对象集成到人机界面中的工作。
+\end{itemize}
+
+\section{Item 13: 优先使用显式字符串拼接而非隐式拼接，尤其是在列表中}
+
+在 Python 发展的早期，它直接从 C 语言继承了诸多特性，包括数值字面量的记法和类似 \texttt{printf} 的格式字符串。此后语言已经发生了很大演变；例如，八进制数现在需要 \texttt{0o} 前缀，而不再只是 \texttt{0}，而且新的字符串插值语法要优秀得多（见 Item 11（"优先使用插值 f 字符串而非 C 风格格式字符串与 \texttt{str.format}"））。
+
+然而，Python 中保留的一项类 C 特性是隐式字符串拼接。它使得相邻的字符串字面量表达式无需中缀 \texttt{+} 运算符即可被拼接起来。
+
+因此，下面这两个赋值的实际效果是相同的：
+
+\begin{codebox}[python]
+my_test1 = "hello" "world"
+my_test2 = "hello" + "world"
+assert my_test1 == my_test2
+\end{codebox}
+
+当你需要将具有不同转义要求的不同类型字符串字面量组合在一起时，这种隐式拼接行为会很有用，在做文本模板或代码生成的程序中这是一种常见需求。例如，这里我隐式地合并了一个原始字符串、一个 f 字符串以及一个单引号字符串：
+
+\begin{codebox}[python]
+x = 1
+my_test1 = (
+    r"first \ part is here with escapes\n, "
+    f"string interpolation {x} in here, "
+    'this has "double quotes" inside'
+)
+print(my_test1)
+>>>
+first \ part is here with escapes\n, string interpolation 1 in
+here, this has "double quotes" inside
+\end{codebox}
+
+让每种类型的字符串字面量各占一行，使这段代码更易读，而且缺少运算符也减少了视觉噪声。相比之下，当隐式拼接发生在单行上时，在不额外留心的情况下很难预判代码会做什么：
+
+\begin{codebox}[python]
+y = 2
+my_test2 = r"fir\st" f"{y}" '"third"'
+print(my_test2)
+>>>
+fir\st2"third"
+\end{codebox}
+
+像这样的隐式拼接还容易出错。如果你在相邻的字符串之间不小心插入一个逗号字符，代码的含义就会完全不同（类似问题见 Item 6（"始终用括号包裹单元素元组"））：
+
+\begin{codebox}[python]
+my_test3 = r"fir\st", f"{y}" '"third"'
+print(my_test3)
+>>>
+('fir\\st', '2"third"')
+\end{codebox}
+
+如果你反其道而行，不小心删掉一个逗号而不是添加逗号，也会出现另一个问题。例如，假设我想创建一个用于输出的字符串列表，每行一个元素：
+
+\begin{codebox}[python]
+my_test4 = [
+    "first line\n",
+    "second line\n",
+    "third line\n",
+]
+print(my_test4)
+>>>
+['first line\n', 'second line\n', 'third line\n']
+\end{codebox}
+
+如果我删掉中间的逗号，得到的数据结构会类似，但最后两行会被静默地合并在一起。
+
+\begin{codebox}[python]
+my_test5 = [
+    "first line\n",
+    "second line\n"  # 逗号已删除
+    "third line\n",
+]
+print(my_test5)
+>>>
+['first line\n', 'second line\nthird line\n']
+\end{codebox}
+
+作为这段代码的新读者，你乍一看甚至可能注意不到那个缺失的逗号。如果你使用了自动格式化工具（见 Item 2（"遵循 PEP 8 风格指南"）），它可能会把这两行重新换行，让这种隐式行为更容易被发现，像这样：
+
+\begin{codebox}[python]
+my_test5 = [
+    "first line\n",
+    "second line\n" "third line\n",
+]
+\end{codebox}
+
+但即便你确实注意到了正在发生隐式拼接，也很难判断它是有意为之还是无意之举。因此，我的建议是：在 \texttt{list} 或 \texttt{tuple} 字面量内部，始终使用显式的 \texttt{+} 运算符来拼接字符串，以消除隐式拼接带来的任何歧义：
+
+\begin{codebox}[python]
+my_test6 = [
+    "first line\n",
+    "second line\n" +  # 显式
+    "third line\n",
+]
+assert my_test5 == my_test6
+\end{codebox}
+
+当 \texttt{+} 运算符存在时，自动格式化工具可能仍会改变换行方式，但在这种状态下，至少能清楚地看出代码作者原本的意图：
+
+\begin{codebox}[python]
+my_test6 = [
+    "first line\n",
+    "second line\n" + "third line\n",
+]
+\end{codebox}
+
+隐式字符串拼接可能导致问题的另一个地方是函数调用的参数列表。有时在函数调用内部使用隐式拼接看起来没问题，例如使用 \texttt{print} 函数时：
+
+\begin{codebox}[python]
+print("this is my long message "
+      "that should be printed out")
+>>>
+this is my long message that should be printed out
+\end{codebox}
+
+当你在单个位置参数之后提供额外的关键字参数时，隐式拼接甚至可以是可读的：
+
+\begin{codebox}[python]
+import sys
+print("this is my long message "
+      "that should be printed out",
+      end="",
+      file=sys.stderr)
+\end{codebox}
+
+然而，当一个调用接受多个位置参数时，隐式字符串拼接可能令人困惑且容易出错，就像在 \texttt{list} 和 \texttt{tuple} 字面量中一样。例如，这里我在初始化参数列表的中间用隐式拼接创建了一个类的实例——你能多快发现它？
+
+\begin{codebox}[python]
+import sys
+first_value = ...
+second_value = ...
+class MyData:
+    ...
+value = MyData(123,
+               first_value,
+               f"my format string {x}"
+               f"another value {y}",
+               "and here is more text",
+               second_value,
+               stream=sys.stderr)
+\end{codebox}
+
+把字符串拼接改成显式，会让这段代码更容易扫描：
+
+\begin{codebox}[python]
+value2 = MyData(123,
+                first_value,
+                f"my format string {x}" +  # 显式
+                f"another value {y}",
+                "and here is more text",
+                second_value,
+                stream=sys.stderr)
+\end{codebox}
+
+我的建议是：当函数调用接受多个位置参数时，始终使用显式字符串拼接，以避免任何混淆（类似的例子见 Item 37（"用仅限关键字和仅限位置参数来强化清晰度"））。如果只有一个位置参数，就像上面的 \texttt{print} 示例那样，那么使用隐式字符串拼接是可以的。关键字参数既可以使用显式拼接，也可以使用隐式拼接——以最能提升清晰度为准则——因为在 \texttt{=} 字符之后，相邻的字符串字面量不可能被误解为位置参数。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 当 Python 代码中两个字符串字面量彼此相邻时，它们会被合并，就像它们之间有一个 \texttt{+} 运算符一样，这与 C 语言的隐式字符串拼接特性类似。
+\item 避免在 \texttt{list} 和 \texttt{tuple} 字面量中对各项进行隐式字符串拼接，因为这会造成关于原作者意图的歧义。相反，你应该使用带 \texttt{+} 运算符的显式拼接。
+\item 在函数调用中，使用一个位置参数和任意数量的关键字参数时，使用隐式字符串拼接没有问题；但当有多个位置参数时，你应该使用显式拼接。
+\end{itemize}
+
+\section{Item 14: 了解如何对序列进行切片}
+
+Python 提供了把序列（sequence）切成片段的语法。切片（slice）让你能以最小的代价访问序列中某个子集的元素。切片最简单的用途是作用于内置（built-in）类型 \texttt{list}、\texttt{tuple}、\texttt{str} 和 \texttt{bytes}。切片可以扩展到任何实现了 \texttt{\_\_getitem\_\_} 和 \texttt{\_\_setitem\_\_} 特殊方法（special method）的 Python 类（见 Item 57（「为自定义容器类型继承 \texttt{collections.abc} 中的类」））。
+
+切片语法的基本形式是 \texttt{somelist[start:end]}，其中 \texttt{start} 是包含的（inclusive），\texttt{end} 是不包含的（exclusive）：
+
+\begin{codebox}[python]
+a = ["a", "b", "c", "d", "e", "f", "g", "h"]
+print("Middle two:  ", a[3:5])
+print("All but ends:", a[1:7])
+>>>
+Middle two:   ['d', 'e']
+All but ends: ['b', 'c', 'd', 'e', 'f', 'g']
+\end{codebox}
+
+从序列开头切片时，应该省略 0 这个索引，以减少视觉噪音（visual noise）：
+
+\begin{codebox}[python]
+assert a[:5] == a[0:5]
+\end{codebox}
+
+切到序列末尾时，应该省略最后的索引，因为它是多余的：
+
+\begin{codebox}[python]
+assert a[5:] == a[5:len(a)]
+\end{codebox}
+
+切片时使用负数，对于相对序列末尾计算偏移量很有帮助。下面这些切片形式，代码的新读者都能一目了然：
+
+\begin{codebox}[python]
+a[:]      # ["a", "b", "c", "d", "e", "f", "g", "h"]
+a[:5]     # ["a", "b", "c", "d", "e"]
+a[:-1]    # ["a", "b", "c", "d", "e", "f", "g"]
+a[4:]     #                     ["e", "f", "g", "h"]
+a[-3:]    #                          ["f", "g", "h"]
+a[2:5]    #           ["c", "d", "e"]
+a[2:-1]   #           ["c", "d", "e", "f", "g"]
+a[-3:-1]  #                          ["f", "g"]
+\end{codebox}
+
+这里没有任何出人意料之处，我鼓励你放心使用这些变体。
+
+当起始和结束索引超出列表边界时，切片会正确地悄悄略过缺失的元素。这一行为让你的代码很容易为输入序列设定一个要考虑的最大长度：
+
+\begin{codebox}[python]
+first_twenty_items = a[:20]
+last_twenty_items = a[-20:]
+\end{codebox}
+
+相反，直接访问同样的越界索引会引发异常：
+
+\begin{codebox}[python]
+a[20]
+>>>
+Traceback ...
+IndexError: list index out of range
+\end{codebox}
+
+注意（Note）
+要注意，用取反变量给列表做索引，是切片可能带来令人惊讶结果的少数情况之一。例如，当 \texttt{n} 大于零时，表达式 \texttt{somelist[-n:]} 能正常工作（例如 \texttt{n} 为 \texttt{3} 时，\texttt{somelist[-3:]}）。然而，当 \texttt{n} 为零时，表达式 \texttt{somelist[-0:]} 等价于 \texttt{somelist[:]}，结果会是原列表的一份副本。
+
+对列表切片的结果是一个全新的列表。新列表中的每个元素都引用原列表中对应的对象。修改由切片创建的列表，不会影响原列表的内容：
+
+\begin{codebox}[python]
+b = a[3:]
+print("Before:   ", b)
+b[1] = 99
+print("After:    ", b)
+print("No change:", a)
+>>>
+Before:    ['d', 'e', 'f', 'g', 'h']
+After:     ['d', 99, 'f', 'g', 'h']
+No change: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+\end{codebox}
+
+用于赋值时，切片会替换原列表中指定的区间。与解包赋值（unpacking assignment，例如 \texttt{a, b = c[:2]}；见 Item 5（「优先使用多重赋值解包而非索引」）和 Item 16（「优先使用收集式解包而非切片」））不同，切片赋值的两侧长度不必相同。被赋值切片之前和之后的所有值都会被保留，新值会被穿插其中。这里，因为替换列表比指定的切片短，列表缩小了：
+
+\begin{codebox}[python]
+print("Before ", a)
+a[2:7] = [99, 22, 14]
+print("After  ", a)
+>>>
+Before  ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+After   ['a', 'b', 99, 22, 14, 'h']
+\end{codebox}
+
+而这里，因为被赋值的列表比指定的切片长，列表增长了：
+
+\begin{codebox}[python]
+print("Before ", a)
+a[2:3] = [47, 11]
+print("After  ", a)
+>>>
+Before  ['a', 'b', 99, 22, 14, 'h']
+After   ['a', 'b', 47, 11, 22, 14, 'h']
+\end{codebox}
+
+如果在切片时同时省略起始和结束索引，你会得到整个原列表的一份副本：
+
+\begin{codebox}[python]
+b = a[:]
+assert b == a and b is not a
+\end{codebox}
+
+如果你对一个没有起始和结束索引的切片赋值，你会用右侧序列中各项的引用替换掉列表的全部内容（而不是分配一个新列表）：
+
+\begin{codebox}[python]
+b = a
+print("Before a", a)
+print("Before b", b)
+a[:] = [101, 102, 103]
+assert a is b             # 仍然是同一个列表对象
+print("After a ", a)      # 现在有了不同的内容
+print("After b ", b)      # 同一个列表，因此与 a 内容相同
+>>>
+Before a ['a', 'b', 47, 11, 22, 14, 'h']
+Before b ['a', 'b', 47, 11, 22, 14, 'h']
+After a  [101, 102, 103]
+After b  [101, 102, 103]
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 切片时不要啰嗦：起始索引不要用 0，结束索引不要用序列的长度。
+\item 切片对越界的起始或结束索引很宽容，这意味着很容易表达针对序列前端或后端的切片（例如 \texttt{a[:20]} 或 \texttt{a[-20:]}）。
+\item 对列表切片赋值，会用所引用的内容替换原序列中的那个区间，即便两侧长度不同也是如此。
+\end{itemize}
+
+\section{Item 15: 避免在单个表达式中同时使用步进和切片}
+
+除了基本的切片（见 Item 14（「了解如何对序列进行切片」））之外，Python 还有一种针对切片步长（stride）的特殊语法，形式为 \texttt{somelist[start:end:stride]}。它让你在切取序列时每隔 n 个元素取一个。例如，步长可以轻松地按列表中的奇偶序位进行分组：
+
+\begin{codebox}[python]
+x = ["red", "orange", "yellow", "green", "blue", "purple"]
+odds = x[::2]    # 第一、第三、第五
+evens = x[1::2]  # 第二、第四、第六
+print(odds)
+print(evens)
+>>>
+['red', 'yellow', 'blue']
+['orange', 'green', 'purple']
+\end{codebox}
+
+问题在于，步长语法常常会导致出人意料的行为，从而引入 bug。例如，反转字节串（byte string）的一个常见 Python 技巧，是用步长 \texttt{-1} 对字符串切片：
+
+\begin{codebox}[python]
+x = b"mongoose"
+y = x[::-1]
+print(y)
+>>>
+b'esoognom'
+\end{codebox}
+
+这对 Unicode 字符串同样正确（见 Item 10（「了解 \texttt{bytes} 与 \texttt{str} 的区别」））：
+
+\begin{codebox}[python]
+x = "寿司"
+y = x[::-1]
+print(y)
+>>>
+司寿
+\end{codebox}
+
+但是，当 Unicode 数据被编码为 UTF-8 字节串时，它就会出错：
+
+\begin{codebox}[python]
+w = "寿司"
+x = w.encode("utf-8")
+y = x[::-1]
+z = y.decode("utf-8")
+>>>
+Traceback ...
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xb8 in
+position 0: invalid start byte
+\end{codebox}
+
+除了 \texttt{-1} 之外，负的步长还有用吗？考虑下面这些例子：
+
+\begin{codebox}[python]
+x = ["a", "b", "c", "d", "e", "f", "g", "h"]
+x[::2]   # ["a", "c", "e", "g"]
+x[::-2]  # ["h", "f", "d", "b"]
+\end{codebox}
+
+这里，\texttt{::2} 表示「从开头开始，每隔一个取一个」。更棘手的是，\texttt{::-2} 表示「从末尾开始，每隔一个向回取一个」。
+
+你觉得 \texttt{2::2} 是什么意思？那么 \texttt{-2::-2}、\texttt{-2:2:-2} 与 \texttt{2:2:-2} 呢？
+
+\begin{codebox}[python]
+x[2::2]     # ["c", "e", "g"]
+x[-2::-2]   # ["g", "e", "c", "a"]
+x[-2:2:-2]  # ["g", "e"]
+x[2:2:-2]   # []
+>>>
+['c', 'e', 'g']
+['g', 'e', 'c', 'a']
+['g', 'e']
+[]
+\end{codebox}
+
+要点是，切片语法中的步长部分可能极其令人困惑。方括号里有三个数字，光是密集程度就够难读了。而且，起始和结束索引相对步长值何时生效并不直观，尤其是步长为负的时候。
+
+为了避免问题，我建议不要在一个切片中同时使用步长以及起始、结束索引。如果一定要用步长，尽量让它为正值，并省略起始和结束索引。如果必须在带起始或结束索引的情况下使用步长，可以考虑用一个赋值做步进，再用另一个赋值做切片：
+
+\begin{codebox}[python]
+y = x[::2]   # ["a", "c", "e", "g"]
+z = y[1:-1]  # ["c", "e"]
+\end{codebox}
+
+先步进再切片，会额外创建一份数据的浅副本（shallow copy）。第一步操作应尽量把结果切片的大小缩减到最小。如果你的程序承受不起这两步所需的时间或内存，可以考虑使用内置（built-in）模块 \texttt{itertools} 的 \texttt{islice} 方法（见 Item 24（「考虑用 \texttt{itertools} 处理迭代器和生成器」）），它读起来更清晰，而且不允许起始、结束或步长为负值。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在单个切片中同时指定起始、结束和步长，可能极其令人困惑。
+\item 如果必须使用步进，尽量只使用不带起始或结束索引的正步长值；避免使用负步长值。
+\item 如果你需要在单个切片中同时使用起始、结束和步长，可以考虑做两次赋值（一次步进、一次切片），或者使用内置模块 \texttt{itertools} 中的 \texttt{islice}。
+\end{itemize}
+
+\section{Item 16: 优先使用收集式解包而非切片}
+
+基本解包（basic unpacking，见 Item 5（「优先使用多重赋值解包而非索引」））的一个局限是，你必须预先知道所解包序列的长度。例如，这里我有一个列表，记录的是某汽车经销店正在以旧换新的车辆车龄。当我尝试用基本解包取列表的前两项时，运行时（runtime）抛出了异常：
+
+\begin{codebox}[python]
+car_ages = [0, 9, 4, 8, 7, 20, 19, 1, 6, 15]
+car_ages_descending = sorted(car_ages, reverse=True)
+oldest, second_oldest = car_ages_descending
+>>>
+Traceback ...
+ValueError: too many values to unpack (expected 2)
+\end{codebox}
+
+Python 新手往往会在这种情况下依赖索引和切片（见 Item 14（「了解如何对序列进行切片」））。例如，这里我从一个至少包含两个元素的列表中，提取出最旧、次旧以及其他车辆的车龄：
+
+\begin{codebox}[python]
+oldest = car_ages_descending[0]
+second_oldest = car_ages_descending[1]
+others = car_ages_descending[2:]
+print(oldest, second_oldest, others)
+>>>
+20 19 [15, 9, 8, 7, 6, 4, 1, 0]
+\end{codebox}
+
+这能工作，但所有索引和切片在视觉上都很嘈杂。实际上，用这种方式把序列成员划分成不同子集也容易出错，因为你更可能犯差一错误（off-by-one error）；例如，你可能在某一行改了边界，却忘了更新其他行。
+
+为了更好地处理这种情况，Python 还通过带星号的表达式（starred expression）支持收集式解包（catch-all unpacking）。这种语法允许解包赋值中的某一部分接收所有未能匹配解包模式其他部分的值。这里，我使用带星号的表达式得到了与上述相同的结果，却没有任何索引或切片：
+
+\begin{codebox}[python]
+oldest, second_oldest, *others = car_ages_descending
+print(oldest, second_oldest, others)
+>>>
+20 19 [15, 9, 8, 7, 6, 4, 1, 0]
+\end{codebox}
+
+这段代码更短、更易读，而且不再有那种必须跨行保持同步、容易出错的边界索引脆弱性。
+
+带星号的表达式可以出现在任何位置——开头、中间或末尾——因此，只要你需要在提取某个可选切片时获得收集式解包的好处，随时都可以用（见 Item 9（「在流程控制中用 \texttt{match} 做解构，当 \texttt{if} 语句已足够时避免滥用」），其中还有另一种适用情形）：
+
+\begin{codebox}[python]
+oldest, *others, youngest = car_ages_descending
+print(oldest, youngest, others)
+*others, second_youngest, youngest = car_ages_descending
+print(youngest, second_youngest, others)
+>>>
+20 0 [19, 15, 9, 8, 7, 6, 4, 1]
+0 1 [20, 19, 15, 9, 8, 7, 6, 4]
+\end{codebox}
+
+不过，当你在解包赋值中使用带星号的表达式时，必须至少有一个必需的部分，否则会得到语法错误（syntax error）。你不能单独使用收集式表达式：
+
+\begin{codebox}[python]
+*others = car_ages_descending
+>>>
+Traceback ...
+SyntaxError: starred assignment target must be in a list or
+tuple
+\end{codebox}
+
+你也不能在单个解包模式中使用多个收集式表达式：
+
+\begin{codebox}[python]
+first, *middle, *second_middle, last = [1, 2, 3, 4]
+>>>
+Traceback ...
+SyntaxError: multiple starred expressions in assignment
+\end{codebox}
+
+不过，在解包赋值语句中使用多个带星号的表达式是可能的，只要它们服务于被解包嵌套（nested）结构的不同层级。我不推荐下面这种写法（相关建议见 Item 31（「返回专用的结果对象，而非要求函数调用者解包超过三个变量」）），但理解它应当有助于你建立关于带星号表达式如何在解包赋值中使用的直觉：
+
+\begin{codebox}[python]
+car_inventory = {
+    "Downtown": ("Silver Shadow", "Pinto", "DMC"),
+    "Airport": ("Skyline", "Viper", "Gremlin", "Nova"),
+}
+((loc1, (best1, *rest1)),
+ (loc2, (best2, *rest2))) = car_inventory.items()
+print(f"Best at {loc1} is {best1}, {len(rest1)} others")
+print(f"Best at {loc2} is {best2}, {len(rest2)} others")
+>>>
+Best at Downtown is Silver Shadow, 2 others
+Best at Airport is Skyline, 3 others
+\end{codebox}
+
+在所有情况下，带星号的表达式都会变成列表（list）实例。如果所解包的序列没有剩余元素，收集部分就会是一个空列表。当你处理一个预先知道至少包含 N 个元素的序列时，这一点尤其有用：
+
+\begin{codebox}[python]
+short_list = [1, 2]
+first, second, *rest = short_list
+print(first, second, rest)
+>>>
+1 2 []
+\end{codebox}
+
+你也可以用解包语法解包任意迭代器（iterator）。在基本的多重赋值语句中，这意义不大。例如，这里我解包了对长度为 2 的 \texttt{range} 进行迭代所得到的值。这似乎没什么用，因为直接赋给一个与解包模式匹配的静态列表（例如 \texttt{[1, 2]}）会更简单：
+
+\begin{codebox}[python]
+it = iter(range(1, 3))
+first, second = it
+print(f"{first} and {second}")
+>>>
+1 and 2
+\end{codebox}
+
+但加上带星号的表达式后，解包迭代器的价值就清楚了。例如，这里我有一个生成器（generator），它会产出一份 CSV（逗号分隔值，comma-separated values）文件的各行，其中包含该经销店本周的全部车辆订单：
+
+\begin{codebox}[python]
+def generate_csv():
+    yield ("Date", "Make", "Model", "Year", "Price")
+    ...
+\end{codebox}
+
+用索引和切片处理这个生成器的结果没问题，但它需要多行代码，而且视觉上很嘈杂：
+
+\begin{codebox}[python]
+all_csv_rows = list(generate_csv())
+header = all_csv_rows[0]
+rows = all_csv_rows[1:]
+print("CSV Header:", header)
+print("Row count: ", len(rows))
+>>>
+CSV Header: ('Date', 'Make', 'Model', 'Year', 'Price')
+Row count:  200
+\end{codebox}
+
+用带星号的表达式解包，可以轻松地把第一行——也就是表头（header）——与迭代器其余内容分开处理。这样清晰得多：
+
+\begin{codebox}[python]
+it = generate_csv()
+header, *rows = it
+print("CSV Header:", header)
+print("Row count: ", len(rows))
+>>>
+CSV Header: ('Date', 'Make', 'Model', 'Year', 'Price')
+Row count:  200
+\end{codebox}
+
+不过要记住，因为带星号的表达式总是会变成一个列表，解包迭代器也存在耗尽计算机全部内存、导致程序崩溃的风险（调试方法见 Item 115（「用 \texttt{tracemalloc} 理解内存使用与泄漏」））。因此，只有当你有充分理由相信结果数据都能放进内存时，才应该在迭代器上使用收集式解包（另一种做法见 Item 21（「遍历参数时保持防御性」））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 解包赋值可以包含带星号的表达式，用来把未分配给解包模式其他部分的所有值存入一个列表。
+\item 带星号的表达式可以出现在解包模式的任何位置。它们总会变成一个包含零个或多个值的列表实例。
+\item 当把一个列表划分成互不重叠的片段时，收集式解包远比使用分别做切片和索引的独立语句更不容易出错。
+\end{itemize}

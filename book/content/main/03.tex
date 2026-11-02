@@ -1,0 +1,1220 @@
+程序常常需要处理顺序数据——长度固定或动态变化的数据。作为一门以命令式（imperative）为主的编程语言，Python 让以循环实现顺序处理变得轻而易举。这是一种通用模式：在循环的每一轮中，读取存储在变量、列表（list）、字典（dictionary）等中的数据，并执行相应的状态修改或 I/O 操作。对于涉及内置数据类型、容器（container）类型与用户自定义类的常见任务，Python 中的循环用起来自然且得心应手。
+
+Python 还支持迭代器（iterator），它使得以更函数式的风格来处理任意数据流成为可能。你无需直接关心顺序数据是如何存储的，而是可以使用迭代器——它提供了一种隐藏细节的通用抽象。迭代器能让程序更高效、更易于重构，并能处理任意规模的数据。Python 还提供了将迭代器组合在一起、并通过生成器（generator）来完全自定义其行为的功能（详见第 6 章「推导式与生成器（Comprehensions and Generators）」）。
+
+\section{Item 17: 优先用 enumerate 而非 range}
+
+\texttt{range} 内置函数对于遍历整数序列的循环很有用。例如，下面我通过在每个比特位上抛硬币，生成一个 32 位随机数：
+
+\begin{codebox}[python]
+from random import randint
+random_bits = 0
+for i in range(32):
+    if randint(0, 1):
+        random_bits |= 1 << i
+print(bin(random_bits))
+>>>
+0b11101000100100000111000010000001
+\end{codebox}
+
+当你有一个数据结构需要遍历时，比如一个字符串列表，你可以直接遍历这个序列：
+
+\begin{codebox}[python]
+flavor_list = ["vanilla", "chocolate", "pecan", "strawberry"]
+for flavor in flavor_list:
+    print(f"{flavor} is delicious")
+>>>
+vanilla is delicious
+chocolate is delicious
+pecan is delicious
+strawberry is delicious
+\end{codebox}
+
+很多时候，你既想遍历一个列表，又想知道列表中当前项的索引。例如，假设我想打印出我最喜欢的冰激凌口味的排名。一种做法是使用 \texttt{range} 为每个位置生成一个偏移量：
+
+\begin{codebox}[python]
+for i in range(len(flavor_list)):
+    flavor = flavor_list[i]
+    print(f"{i + 1}: {flavor}")
+>>>
+1: vanilla
+2: chocolate
+3: pecan
+4: strawberry
+\end{codebox}
+
+与前面直接遍历 \texttt{flavor\_list} 或 \texttt{range} 的 \texttt{for} 语句示例相比，这种做法显得笨拙。我必须先取得列表的长度，再对数组做索引，多个步骤让代码更难阅读。
+
+Python 提供了 \texttt{enumerate} 内置函数来简化这种情况。\texttt{enumerate} 用惰性生成器（lazy generator，参见 Item 43（"考虑用生成器而非返回列表"））包装任意迭代器。\texttt{enumerate} 会逐个产出循环索引与给定迭代器下一个值所组成的配对。下面，我用 \texttt{next} 内置函数手动推进返回的迭代器，以演示它的行为：
+
+\begin{codebox}[python]
+it = enumerate(flavor_list)
+print(next(it))
+print(next(it))
+>>>
+(0, 'vanilla')
+(1, 'chocolate')
+\end{codebox}
+
+\texttt{enumerate} 产出的每一对都可以在 \texttt{for} 语句中简洁地解包（相关原理参见 Item 5（"优先用多重赋值解包而非索引"））。得到的代码清晰得多：
+
+\begin{codebox}[python]
+for i, flavor in enumerate(flavor_list):
+    print(f"{i + 1}: {flavor}")
+>>>
+1: vanilla
+2: chocolate
+3: pecan
+4: strawberry
+\end{codebox}
+
+我还可以指定 \texttt{enumerate} 用于开始计数的数字（本例为 \texttt{1}）作为第二个参数，让代码更简短：
+
+\begin{codebox}[python]
+for i, flavor in enumerate(flavor_list, 1):
+    print(f"{i}: {flavor}")
+\end{codebox}
+
+\subsection{需要记住的要点}
+\begin{itemize}
+\item \texttt{enumerate} 提供了简洁的语法，用于在遍历迭代器时同时获取每一项在迭代器中的索引。
+\item 优先使用 \texttt{enumerate}，而不是遍历 \texttt{range} 再对序列做索引。
+\item 你可以给 \texttt{enumerate} 提供第二个可选参数，用于指定开始计数的起始数字（默认为零）。
+\end{itemize}
+
+\section{Item 18: 用 zip 并行处理多个迭代器}
+
+在 Python 中，你经常会遇到许多包含相关对象的列表。列表推导式（list comprehension）让你能轻松地对源列表中的每个元素应用一个表达式，从而由源列表生成另一个派生列表（参见 Item 40（"用推导式而非 map 和 filter"））。例如，这里我取一个名字列表，并生成一份对应的列表，记录每个名字包含多少个字符：
+
+\begin{codebox}[python]
+names = ["Cecilia", "Lise", "Marie"]
+counts = [len(n) for n in names]
+print(counts)
+>>>
+[7, 4, 5]
+\end{codebox}
+
+派生列表（\texttt{counts}）中的各项，与源列表（\texttt{names}）中的各项，通过它们在序列中对应的位置相互关联。为了在单个循环中同时访问两个列表中的项，我可以遍历源列表（\texttt{names}）的长度，并用 \texttt{range} 生成的偏移量对任一列表做索引。例如，下面我用并行索引（parallel indexing）来确定哪个名字最长：
+
+\begin{codebox}[python]
+longest_name = None
+max_count = 0
+for i in range(len(names)):
+    count = counts[i]
+    if count > max_count:
+        longest_name = names[i]
+        max_count = count
+print(longest_name)
+>>>
+Cecilia
+\end{codebox}
+
+问题在于，整段 \texttt{for} 语句在视觉上很嘈杂。索引操作——\texttt{names[i]} 和 \texttt{counts[i]}——让代码难以阅读。用同一个循环索引 \texttt{i} 对两个数组做索引，显得多余。我可以使用 \texttt{enumerate} 内置函数（参见 Item 17（"优先用 enumerate 而非 range"））来略微改善，但由于仍要写 \texttt{counts[i]} 索引操作，这依然不够理想：
+
+\begin{codebox}[python]
+longest_name = None
+max_count = 0
+for i, name in enumerate(names):  # Changed
+    count = counts[i]
+    if count > max_count:
+        longest_name = name       # Changed
+        max_count = count
+\end{codebox}
+
+为了让这段代码更清晰，Python 提供了 \texttt{zip} 内置函数。\texttt{zip} 用惰性生成器包装两个或更多迭代器。\texttt{zip} 生成器会产出元组（tuple），其中含有每个迭代器的下一个值。这些元组可以在 \texttt{for} 语句中直接解包（背景知识参见 Item 5（"优先用多重赋值解包而非索引"））。通过消除索引操作，得到的代码比上面分别访问两个列表的代码清爽得多：
+
+\begin{codebox}[python]
+longest_name = None
+max_count = 0
+for name, count in zip(names, counts):  # Changed
+    if count > max_count:
+        longest_name = name
+        max_count = count
+\end{codebox}
+
+\texttt{zip} 每次只消费它所包装的迭代器中的一个元素，这意味着它可用于无限长的输入，而不必担心程序因占用过多内存而崩溃（关于如何创建这类输入，参见 Item 43（"考虑用生成器而非返回列表"）和 Item 44（"对于大型列表推导式考虑用生成器表达式"））。
+
+然而，要当心 \texttt{zip} 在输入迭代器长度不同时的行为。例如，假设我给 \texttt{names} 列表又添加了一项，却忘了更新 \texttt{counts} 列表。对这两个输入列表运行 \texttt{zip}，会得到出乎意料的结果：
+
+\begin{codebox}[python]
+names.append("Rosalind")
+for name, count in zip(names, counts):
+    print(name)
+>>>
+Cecilia
+Lise
+Marie
+\end{codebox}
+
+新添加的 \texttt{"Rosalind"} 并没有出现在输出中。为什么？这正是 \texttt{zip} 的工作方式。它会持续产出元组，直到被包装的任意一个迭代器耗尽为止。它的输出长度只与最短的输入一样长。
+
+如果过早截断（premature truncation）可能对你的程序造成问题，你可以把 \texttt{strict} 关键字参数传给 \texttt{zip}——这是自 Python 3.10 起新增的选项——这样当任意一个输入比其他输入更早耗尽时，返回的生成器就会抛出异常：
+
+\begin{codebox}[python]
+for name, count in zip(names, counts, strict=True):  # Changed
+    print(name)
+>>>
+Cecilia
+Lise
+Marie
+Traceback ...
+ValueError: zip() argument 2 is shorter than argument 1
+\end{codebox}
+
+另外，你也可以改用 \texttt{itertools} 内置模块中的 \texttt{zip\_longest} 函数，用一个默认值填补缺失的项，从而解决截断问题（参见 Item 24（"考虑用 itertools 处理迭代器和生成器"））。
+
+\subsection{需要记住的要点}
+\begin{itemize}
+\item \texttt{zip} 内置函数可用于并行遍历多个迭代器。
+\item \texttt{zip} 创建的是一个惰性生成器，它会产出元组；它可用于无限长的输入。
+\item 如果你传给 \texttt{zip} 的迭代器长度不同，它会悄悄地把输出截断到最短的那个迭代器的长度。
+\item 如果你想确保不会发生静默截断、并且迭代器长度不一致时应导致运行时错误，那就给 \texttt{zip} 传入 \texttt{strict} 关键字参数。
+\end{itemize}
+
+\section{Item 19: 避免在 for 和 while 循环后使用 else 代码块}
+
+Python 的循环有一个大多数其他编程语言所没有的额外特性：你可以在循环重复执行的内层代码块之后，立即放一个 \texttt{else} 代码块：
+
+\begin{codebox}[python]
+for i in range(3):
+    print("Loop", i)
+else:
+    print("Else block!")
+>>>
+Loop 0
+Loop 1
+Loop 2
+Else block!
+\end{codebox}
+
+令人意外的是，\texttt{else} 代码块会在循环一结束就立即运行。为什么这个子句叫 \texttt{else}？叫 \texttt{and} 不行吗？在 \texttt{if}/\texttt{else} 语句中，\texttt{else} 的含义是"如果前面的代码块没有执行，就执行这个"（参见 Item 7（"考虑用条件表达式处理简单的内联逻辑"））。在 \texttt{try}/\texttt{except} 语句中，\texttt{except} 的定义相同："如果前面代码块的执行失败了，就执行这个"。
+
+类似地，\texttt{try}/\texttt{except}/\texttt{else} 中的 \texttt{else} 也遵循这一模式（参见 Item 80（"充分利用 try/except/else/finally 中的每个代码块"）），因为它的含义是"如果没有需要处理的异常，就执行这个"。\texttt{try}/\texttt{finally} 也很直观，因为它的含义是"无论前面的代码块执行结果如何，之后总要执行这个"。
+
+鉴于 \texttt{else}、\texttt{except} 和 \texttt{finally} 在 Python 中的各种用法，新手程序员可能会以为 \texttt{for}/\texttt{else} 中的 \texttt{else} 部分表示"如果循环没有执行完，就做这个"。实际上，它的含义恰好相反。在循环中使用 \texttt{break} 语句，反而会跳过 \texttt{else} 代码块：
+
+\begin{codebox}[python]
+for i in range(3):
+    print("Loop", i)
+    if i == 1:
+        break
+else:
+    print("Else block!")
+>>>
+Loop 0
+Loop 1
+\end{codebox}
+
+另一个令人意外之处是：如果你遍历一个空序列，\texttt{else} 代码块会立即运行：
+
+\begin{codebox}[python]
+for x in []:
+    print("Never runs")
+else:
+    print("For else block!")
+>>>
+For else block!
+\end{codebox}
+
+当 \texttt{while} 循环一开始的条件就为 \texttt{False} 时，\texttt{else} 代码块同样会运行：
+
+\begin{codebox}[python]
+while False:
+    print("Never runs")
+else:
+    print("While else block!")
+>>>
+While else block!
+\end{codebox}
+
+这些行为之所以这样设计，是因为循环后的 \texttt{else} 代码块在你搜索某个东西时很有用。例如，假设我想判断两个数字是否互质（coprime，即它们唯一的公约数是 1）。这里，我遍历每一个可能的公约数并对这两个数字做测试。在尝试完每个选项之后，循环结束。当这两个数字互质时，\texttt{else} 代码块会运行，因为循环没有遇到 \texttt{break}：
+
+\begin{codebox}[python]
+a = 4
+b = 9
+for i in range(2, min(a, b) + 1):
+    print("Testing", i)
+    if a % i == 0 and b % i == 0:
+        print("Not coprime")
+        break
+else:
+    print("Coprime")
+>>>
+Testing 2
+Testing 3
+Testing 4
+Coprime
+\end{codebox}
+
+实际上，我不会这样写代码。相反，我会写一个辅助函数来做这个计算。这种函数可以用两种常见风格中的任意一种来写。
+
+第一种做法是：一旦匹配到我正在寻找的条件，就提前返回。只有当循环自然走完、没有命中时，我才返回默认结果：
+
+\begin{codebox}[python]
+def coprime(a, b):
+    for i in range(2, min(a, b) + 1):
+        if a % i == 0 and b % i == 0:
+            return False
+    return True
+assert coprime(4, 9)
+assert not coprime(3, 6)
+\end{codebox}
+
+第二种做法是：用一个结果变量来标记是否在循环中找到了我要找的东西。这里，一旦找到就立即 \texttt{break} 跳出循环，然后返回这个标记变量：
+
+\begin{codebox}[python]
+def coprime_alternate(a, b):
+    is_coprime = True
+    for i in range(2, min(a, b) + 1):
+        if a % i == 0 and b % i == 0:
+            is_coprime = False
+            break
+    return is_coprime
+assert coprime_alternate(4, 9)
+assert not coprime_alternate(3, 6)
+\end{codebox}
+
+对于阅读陌生代码的人来说，这两种做法都要清晰得多。视具体情况而定，二者都可能是一个不错的选择。然而，从 \texttt{else} 代码块获得的表达力，并不足以抵消你给那些（包括未来的你自己）想要理解你代码的人增加的负担。像循环这样简单的结构，在 Python 中本应一目了然。你应该彻底避免在循环之后使用 \texttt{else} 代码块。
+
+\subsection{需要记住的要点}
+\begin{itemize}
+\item Python 有一种特殊语法，允许 \texttt{else} 代码块紧跟在 \texttt{for} 和 \texttt{while} 循环的内层代码块之后。
+\item 循环之后的 \texttt{else} 代码块，只有在循环体没有遇到 \texttt{break} 语句时才会运行。
+\item 避免在循环之后使用 \texttt{else} 代码块，因为它的行为不直观，容易让人困惑。
+\end{itemize}
+
+\section{Item 20: 循环结束后切勿使用循环变量}
+
+在 Python 中编写 \texttt{for} 循环时，你可能会注意到，为迭代而创建的变量在循环结束后仍然持续存在：
+
+\begin{codebox}[python]
+for i in range(3):
+    print(f"Inside {i=}")
+print(f"After  {i=}")
+>>>
+Inside i=0
+Inside i=1
+Inside i=2
+After  i=2
+\end{codebox}
+
+可以利用这种循环变量赋值行为带来的好处。例如，我在此实现一个算法，通过在列表中搜索各元素的索引，将周期元素分组归类：
+
+\begin{codebox}[python]
+categories = ["Hydrogen", "Uranium", "Iron", "Other"]
+for i, name in enumerate(categories):
+    if name == "Iron":
+        break
+print(i)
+>>>
+2
+\end{codebox}
+
+如果某个给定元素在列表中找不到，那么在迭代耗尽之后，将使用最后一个索引把该元素归入 ``Other''（兜底）类别（本例中索引为 3）：
+
+\begin{codebox}[python]
+for i, name in enumerate(categories):
+    if name == "Lithium":
+        break
+print(i)
+>>>
+3
+\end{codebox}
+
+该算法的假设是：要么循环会找到匹配项，并因 \texttt{break} 语句而提前结束；要么循环会遍历完所有选项后自然结束。遗憾的是，还存在第三种可能——由于迭代器（iterator）初始为空，循环根本不会开始，而这会引发一个运行时（runtime）异常：
+
+\begin{codebox}[python]
+categories = []
+for i, name in enumerate(categories):
+    if name == "Lithium":
+        break
+print(i)
+>>>
+Traceback ...
+NameError: name 'i' is not defined
+\end{codebox}
+
+对于从不处理任何内容的循环，还有其他应对方法（参见 Item 19（``避免在 \texttt{for} 和 \texttt{while} 循环之后使用 \texttt{else} 块''））。但要点是相同的：你无法总是确定，在循环结束后试图访问循环变量时它一定存在，所以实践中最好不要这样做。
+
+幸好——或者说或许不幸——其他 Python 特性不存在这个问题。列表推导式（list comprehension）和生成器表达式（generator expression）并不会表现出循环变量泄露（leakage）的行为（参见 Item 40（``用推导式替代 \texttt{map} 和 \texttt{filter}''）以及 Item 44（``对大型列表推导式考虑使用生成器表达式''））。如果在执行之后试图访问推导式内部的变量，你会发现它们从不曾存在，因此也就不可能不小心掉进这个陷阱：
+
+\begin{codebox}[python]
+my_numbers = [37, 13, 128, 21]
+found = [i for i in my_numbers if i % 2 == 0]
+print(i)  # 总会抛出异常
+>>>
+Traceback ...
+NameError: name 'i' is not defined
+\end{codebox}
+
+不过，推导式中的赋值表达式（assignment expression）有可能改变这一行为（参见 Item 42（``用赋值表达式减少推导式中的重复''））。异常变量同样不存在这种泄露问题，尽管它们自有其古怪之处（参见 Item 84（``当心异常变量消失''））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{for} 循环产生的循环变量，即便在循环终止之后，仍可在当前作用域（scope）中访问。
+\item 如果循环一次迭代都没有执行，那么 \texttt{for} 循环的变量就不会被赋值到当前作用域。
+\item 生成器表达式和列表推导式默认不会泄露循环变量。
+\item 异常处理程序不会泄露异常实例变量。
+\end{itemize}
+
+\section{Item 21: 遍历参数时要做好防御性编程}
+
+当一个函数把对象的 \texttt{list}（列表）作为参数时，通常需要对该 \texttt{list} 进行多次遍历。举例来说，假设我想分析美国得克萨斯州的旅游数据。假设数据集是各个城市每年的游客数量（以百万计）。我希望求出每个城市在整体旅游人数中所占的百分比。为此，我需要一个归一化函数：它先对输入求和以确定每年的游客总数，再用每个城市各自的游客数除以总数，从而得到该城市对整体的贡献：
+
+\begin{codebox}[python]
+def normalize(numbers):
+    total = sum(numbers)
+    result = []
+    for value in numbers:
+        percent = 100 * value / total
+        result.append(percent)
+    return result
+\end{codebox}
+
+这个函数传入一个访问量列表时能够按预期工作：
+
+\begin{codebox}[python]
+visits = [15, 35, 80]
+percentages = normalize(visits)
+print(percentages)
+assert sum(percentages) == 100.0
+>>>
+[11.538461538461538, 26.923076923076923, 61.53846153846154]
+\end{codebox}
+
+为了扩展规模，我需要从文件中读取得克萨斯州所有城市的数据。我定义了一个生成器（generator）来完成这件事，这样以后当我想要计算全世界的旅游数据时——那是一个规模大得多、内存需求更高的数据集——还能复用同一个函数（背景知识见 Item 43：用生成器代替返回列表）：
+
+\begin{codebox}[python]
+def read_visits(data_path):
+    with open(data_path) as f:
+        for line in f:
+            yield int(line)
+\end{codebox}
+
+令人意外的是，对 \texttt{read\_visits} 生成器的返回值调用 \texttt{normalize} 不会产生任何结果：
+
+\begin{codebox}[python]
+it = read_visits("my_numbers.txt")
+percentages = normalize(it)
+print(percentages)
+>>>
+[]
+\end{codebox}
+
+这种行为的起因是，迭代器（iterator）只会产生一次结果。如果你对一个迭代器或生成器进行第二次遍历，而它已经抛出过 \texttt{StopIteration} 异常，那么你将得不到任何结果：
+
+\begin{codebox}[python]
+it = read_visits("my_numbers.txt")
+print(list(it))
+print(list(it))  # Already exhausted
+>>>
+[15, 35, 80]
+[]
+\end{codebox}
+
+令人困惑的是，当你遍历一个已经耗尽的迭代器时，并不会抛出异常。\texttt{for} 循环、\texttt{list} 构造函数，以及 Python 标准库（standard library）中许多其他函数，都期望在正常运行过程中抛出 \texttt{StopIteration} 异常。这些函数无法区分「一个没有任何输出的迭代器」和「一个曾经有输出、如今已被耗尽的迭代器」。
+
+要解决这个问题，你可以显式地耗尽一个输入迭代器，并把它的全部内容复制到一个列表中保留下来。之后你就可以按需对该数据的列表版本进行任意多次遍历。下面这个函数和之前一样，但现在它会防御性地复制输入迭代器：
+
+\begin{codebox}[python]
+def normalize_copy(numbers):
+    numbers_copy = list(numbers)  # 复制该迭代器
+    total = sum(numbers_copy)
+    result = []
+    for value in numbers_copy:
+        percent = 100 * value / total
+        result.append(percent)
+    return result
+\end{codebox}
+
+现在这个函数在 \texttt{read\_visits} 生成器的返回值上能正确工作了：
+
+\begin{codebox}[python]
+it = read_visits("my_numbers.txt")
+percentages = normalize_copy(it)
+print(percentages)
+assert sum(percentages) == 100.0
+>>>
+[11.538461538461538, 26.923076923076923, 61.53846153846154]
+\end{codebox}
+
+这种方法的缺陷在于，复制输入迭代器的内容可能会极其庞大。复制迭代器可能导致程序内存耗尽而崩溃（关于如何调试，见 Item 115：用 \texttt{tracemalloc} 了解内存使用与泄漏）。这种可扩展性方面的隐患，动摇了我当初把 \texttt{read\_visits} 写成生成器的初衷。一个绕过办法是：接受一个函数，它每次被调用时都会返回一个新的迭代器：
+
+\begin{codebox}[python]
+def normalize_func(get_iter):
+    total = sum(get_iter())   # New iterator
+    result = []
+    for value in get_iter():  # New iterator
+        percent = 100 * value / total
+        result.append(percent)
+    return result
+\end{codebox}
+
+要调用 \texttt{normalize\_func}，我可以传入一个 \texttt{lambda} 表达式，它每次被调用时都会产生一个新的生成器迭代器：
+
+\begin{codebox}[python]
+path = "my_numbers.txt"
+percentages = normalize_func(lambda: read_visits(path))
+print(percentages)
+assert sum(percentages) == 100.0
+>>>
+[11.538461538461538, 26.923076923076923, 61.53846153846154]
+\end{codebox}
+
+虽然这能奏效，但像这样必须传入一个 \texttt{lambda} 函数实在笨拙。要达到同样效果，更好的办法是定义一个新的容器（container）类，让它实现迭代器协议（iterator protocol）。
+
+迭代器协议正是 Python 的 \texttt{for} 循环及相关表达式用来遍历容器类型内容的机制。当 Python 看到形如 \texttt{for x in foo} 的语句时，它实际上会调用 \texttt{iter(foo)} 来找出要遍历的迭代器。\texttt{iter} 内置函数进而会调用 \texttt{foo.\_\_iter\_\_} 这个特殊方法（special method）。\texttt{\_\_iter\_\_} 方法必须返回一个迭代器对象（该对象本身也实现了 \texttt{\_\_next\_\_} 特殊方法）。然后，\texttt{for} 循环会反复在迭代器对象上调用 \texttt{next} 内置函数，直到它耗尽为止（表现为抛出 \texttt{StopIteration} 异常）。
+
+这听起来很复杂，但在实践中，只要把 \texttt{\_\_iter\_\_} 方法实现为一个生成器，你就能让自己的类具备上述全部行为。下面我定义一个可迭代（iterable）容器类，它读取包含旅游数据的文件，并用 \texttt{yield} 每次产出一行数据：
+
+\begin{codebox}[python]
+class ReadVisits:
+    def __init__(self, data_path):
+        self.data_path = data_path
+    def __iter__(self):
+        with open(self.data_path) as f:
+            for line in f:
+                yield int(line)
+\end{codebox}
+
+这个新的容器类型无需任何修改就能传给原来的函数：
+
+\begin{codebox}[python]
+visits = ReadVisits(path)
+percentages = normalize(visits)  # Changed
+print(percentages)
+assert sum(percentages) == 100.0
+>>>
+[11.538461538461538, 26.923076923076923, 61.53846153846154]
+\end{codebox}
+
+这能奏效的原因是，\texttt{normalize} 中的 \texttt{sum} 方法会调用 \texttt{ReadVisits.\_\_iter\_\_} 来分配一个新的迭代器对象。而用于归一化数字的 \texttt{for} 循环也会调用 \texttt{\_\_iter\_\_} 来分配第二个迭代器对象。这两个迭代器会各自独立地推进并耗尽，从而保证每一次独立的遍历都能看到全部输入数据值。这种方法的唯一缺点在于，它会多次读取输入数据。
+
+既然你已经了解像 \texttt{ReadVisits} 这样的容器如何运作，就可以编写自己的函数和方法，确保参数不仅仅是迭代器。该协议规定：当一个迭代器被传给 \texttt{iter} 内置函数时，\texttt{iter} 返回迭代器自身；相反，当一个容器类型被传给 \texttt{iter} 时，每次都会返回一个新的迭代器对象。因此，你可以测试输入值是否具有这种行为，并通过抛出 \texttt{TypeError} 来拒绝那些无法被重复遍历的参数：
+
+\begin{codebox}[python]
+def normalize_defensive(numbers):
+    if iter(numbers) is numbers:  # 是迭代器——不行！
+        raise TypeError("Must supply a container")
+    total = sum(numbers)
+    result = []
+    for value in numbers:
+        percent = 100 * value / total
+        result.append(percent)
+    return result
+\end{codebox}
+
+另一种做法是，内置模块 \texttt{collections.abc} 定义了一个 \texttt{Iterator} 类，可以在 \texttt{isinstance} 测试中用来识别这个潜在问题（见 Item 57：从 \texttt{collections.abc} 类继承以定义自定义容器类型）：
+
+\begin{codebox}[python]
+from collections.abc import Iterator
+def normalize_defensive(numbers):
+    if isinstance(numbers, Iterator):  # 另一种检查方式
+        raise TypeError("Must supply a container")
+    total = sum(numbers)
+    result = []
+    for value in numbers:
+        percent = 100 * value / total
+        result.append(percent)
+    return result
+\end{codebox}
+
+如果你不想复制整个输入迭代器——就像上面的 \texttt{normalize\_copy} 函数那样——却又需要对输入数据进行多次遍历，那么「要求传入容器」这种做法是理想的选择。下面我演示 \texttt{normalize\_defensive} 函数如何接受一个列表、一个 \texttt{ReadVisits} 对象，或者理论上任何遵循迭代器协议的容器：
+
+\begin{codebox}[python]
+visits_list = [15, 35, 80]
+list_percentages = normalize_defensive(visits_list)
+visits_obj = ReadVisits(path)
+obj_percentages = normalize_defensive(visits_obj)
+assert list_percentages == obj_percentages
+assert sum(percentages) == 100.0
+\end{codebox}
+
+如果输入是迭代器而非容器，\texttt{normalize\_defensive} 函数就会抛出异常：
+
+\begin{codebox}[python]
+visits = [15, 35, 80]
+it = iter(visits)
+normalize_defensive(it)
+>>>
+Traceback ...
+TypeError: Must supply a container
+\end{codebox}
+
+同样的、检查是否遵循迭代器协议的做法，也可以用于异步（asynchronous）迭代器（见 Item 76：了解如何将多线程 I/O 移植到 \texttt{asyncio}中的示例）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 当心那些会对输入参数进行多次遍历的函数和方法。如果这些参数是迭代器，你可能会看到诡异的行为和缺失的值。
+\item Python 的迭代器协议定义了容器与迭代器如何与 \texttt{iter} 和 \texttt{next} 这两个内置函数、\texttt{for} 循环以及相关的表达式相互作用。
+\item 你可以很轻松地把自己的可迭代容器类型定义为：把 \texttt{\_\_iter\_\_} 方法实现为一个生成器。
+\item 如果一个值在调用 \texttt{iter} 时返回的是你传入的那个相同值，你就能判断出它是迭代器（而非容器）。另一种做法是，使用 \texttt{isinstance} 内置函数配合 \texttt{collections.abc.Iterator} 类。
+\end{itemize}
+
+\section{Item 22: 不要在迭代容器时修改它们；改用副本或缓存}
+
+Python 中有许多因出人意料的迭代行为而引发的陷阱（另一个常见情形见 Item 21「迭代参数时要保持防御性」）。例如，如果在迭代字典（dictionary）时向其添加新条目，Python 会抛出一个运行时异常：
+
+\begin{codebox}[python]
+search_key = "red"
+my_dict = {"red": 1, "blue": 2, "green": 3}
+for key in my_dict:
+    if key == "blue":
+        my_dict["yellow"] = 4  # Causes error
+>>>
+Traceback ...
+RuntimeError: dictionary changed size during iteration
+\end{codebox}
+
+如果在迭代字典时删除其中的条目，也会出现类似的错误：
+
+\begin{codebox}[python]
+for key in my_dict:
+    if key == "blue":
+        del my_dict["green"]  # Causes error
+>>>
+Traceback ...
+RuntimeError: dictionary changed size during iteration
+\end{codebox}
+
+如果只是在字典中修改与已有键关联的值，而并非增删键，则不会报错——这与上面那些行为出人意料地不一致：
+
+\begin{codebox}[python]
+for key in my_dict:
+    if key == "blue":
+        my_dict["green"] = 4  # Okay
+print(my_dict)
+>>>
+{'red': 1, 'blue': 2, 'green': 4}
+\end{codebox}
+
+集合（set）的行为方式与字典类似，如果在迭代过程中通过增删元素来改变其大小，运行时也会遇到异常：
+
+\begin{codebox}[python]
+my_set = {"red", "blue", "green"}
+for color in my_set:
+    if color == "blue":
+        my_set.add("yellow")  # Causes error
+>>>
+Traceback ...
+RuntimeError: Set changed size during iteration
+\end{codebox}
+
+然而，\texttt{set} 的行为看起来同样不一致，因为在迭代它时，试图添加集合中已存在的元素并不会引发任何问题。重新添加是允许的，因为集合的大小并未改变：
+
+\begin{codebox}[python]
+for color in my_set:
+    if color == "blue":
+        my_set.add("green")  # Okay
+print(my_set)
+>>>
+{'green', 'blue', 'red'}
+\end{codebox}
+
+与字典非常相似，并且同样出人意料地不一致的是，列表（list）在迭代期间可以毫无问题地覆盖任意已有的索引：
+
+\begin{codebox}[python]
+my_list = [1, 2, 3]
+for number in my_list:
+    print(number)
+    if number == 2:
+        my_list[0] = -1  # Okay
+print(my_list)
+>>>
+1
+2
+3
+[-1, 2, 3]
+\end{codebox}
+
+但是，如果你试图在当前迭代器位置之前向列表中插入元素，代码就会陷入无限循环：
+
+\begin{codebox}[python]
+my_list = [1, 2, 3]
+for number in my_list:
+    print(number)
+    if number == 2:
+        my_list.insert(0, 4)  # Causes error
+>>>
+1
+2
+2
+2
+2
+2
+...
+\end{codebox}
+
+然而，在当前迭代器位置之后向列表追加元素则没有问题——基于索引的迭代器还没走到那么远——这同样是一种出人意料的不一致行为：
+
+\begin{codebox}[python]
+my_list = [1, 2, 3]
+for number in my_list:
+    print(number)
+    if number == 2:
+        my_list.append(4)  # Okay this time
+print(my_list)
+>>>
+1
+2
+3
+4
+[1, 2, 3, 4]
+\end{codebox}
+
+看看上面每个例子，我们很难猜测这段代码在所有情况下是否都能正常工作。在迭代期间修改容器，在修改点会随算法输入而变化的情况下尤其容易出错。有时它能正常工作，有时则会报错。因此，我的建议是：永远不要在迭代容器时修改它们。
+
+如果由于算法本身的性质，你仍然需要在迭代期间进行修改，则应该简单地复制一份你想要迭代的容器，并对原始容器应用修改（参见 Item 30「要知道函数参数可能被修改」）。例如，对于字典，我可以复制它的键：
+
+\begin{codebox}[python]
+my_dict = {"red": 1, "blue": 2, "green": 3}
+keys_copy = list(my_dict.keys())  # Copy
+for key in keys_copy:             # Iterate over copy
+    if key == "blue":
+        my_dict["green"] = 4      # Modify original dict
+print(my_dict)
+>>>
+{'red': 1, 'blue': 2, 'green': 4}
+\end{codebox}
+
+对于列表，我可以复制整个容器：
+
+\begin{codebox}[python]
+my_list = [1, 2, 3]
+list_copy = list(my_list)     # Copy
+for number in list_copy:      # Iterate over copy
+    print(number)
+    if number == 2:
+        my_list.insert(0, 4)  # Inserts in original list
+print(my_list)
+>>>
+1
+2
+3
+[4, 1, 2, 3]
+\end{codebox}
+
+同样的做法也适用于集合：
+
+\begin{codebox}[python]
+my_set = {"red", "blue", "green"}
+set_copy = set(my_set)        # Copy
+for color in set_copy:        # Iterate over copy
+    if color == "blue":
+        my_set.add("yellow")  # Add to original set
+print(my_set)
+>>>
+{'yellow', 'green', 'blue', 'red'}
+\end{codebox}
+
+对于某些极其庞大的容器，复制可能过于缓慢（参见 Item 92「优化前先做性能分析」来验证你的假设）。应对性能不佳的一种办法，是把修改暂存到另一个容器中，然后在迭代结束后再把这些改动合并回主数据结构。例如，这里我修改的是一个独立的字典，然后使用 \texttt{update} 方法把改动带入原始字典：
+
+\begin{codebox}[python]
+my_dict = {"red": 1, "blue": 2, "green": 3}
+modifications = {}
+for key in my_dict:
+    if key == "blue":
+        modifications["green"] = 4  # Add to staging
+my_dict.update(modifications)       # Merge modifications
+print(my_dict)
+>>>
+{'red': 1, 'blue': 2, 'green': 4}
+\end{codebox}
+
+暂存修改的问题在于，这些修改在迭代期间不会立即在原始容器中可见。如果循环里的逻辑依赖于「修改立即可见」，代码就无法按预期工作。例如，这里程序员的本意或许是让 \texttt{"yellow"} 出现在结果字典中，但它并不会出现，因为这些修改在迭代期间并不可见：
+
+\begin{codebox}[python]
+my_dict = {"red": 1, "blue": 2, "green": 3}
+modifications = {}
+for key in my_dict:
+    if key == "blue":
+        modifications["green"] = 4
+    value = my_dict[key]
+    if value == 4:               # This condition is never true
+        modifications["yellow"] = 5
+my_dict.update(modifications)    # Merge modifications
+print(my_dict)
+>>>
+{'red': 1, 'blue': 2, 'green': 4}
+\end{codebox}
+
+这段代码可以通过在迭代期间同时查看原始容器（\texttt{my\_dict}）和暂存容器（\texttt{modifications}）来获取最新值来修复，本质上就是把暂存字典当作一个中间缓存（cache）来使用：
+
+\begin{codebox}[python]
+my_dict = {"red": 1, "blue": 2, "green": 3}
+modifications = {}
+for key in my_dict:
+    if key == "blue":
+        modifications["green"] = 4
+    value = my_dict[key]
+    other_value = modifications.get(key)  # Check cache
+    if value == 4 or other_value == 4:
+        modifications["yellow"] = 5
+my_dict.update(modifications)             # Merge modifications
+print(my_dict)
+>>>
+{'red': 1, 'blue': 2, 'green': 4, 'yellow': 5}
+\end{codebox}
+
+这种协调方式确实可行，但很难推广到所有情形。在开发这类算法时，你需要把自身特定的约束条件考虑进去。要完全做对可能相当困难，尤其是涉及各种边界情况的时候，所以我建议编写自动化测试来验证正确性（参见 Item 109「优先使用集成测试而非单元测试」）。类似地，你也可以用微基准测试来衡量各种方法的性能，并从中选出最优的一种（参见 Item 93「使用 \texttt{timeit} 微基准测试优化性能关键代码」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在迭代列表、字典和集合时增删其中的元素，可能引发往往难以预测的运行时错误。
+\item 你可以迭代容器的副本，以避免迭代过程中因容器被修改而可能引发的运行时错误。
+\item 如果你为了更好的性能而需要避免复制，可以把修改暂存到第二个容器（作为缓存），之后再将其合并回原始容器。
+\end{itemize}
+
+\section{Item 23: 将迭代器传给 any 和 all 以实现高效的短路逻辑}
+
+Python 是一门非常适合编写执行逻辑推理程序的编程语言。举个例子，假设我想分析抛硬币的规律。我可以定义一个函数，每次被调用时都返回一个随机的抛硬币结果——正面用 \texttt{True} 表示，反面用 \texttt{False} 表示：
+
+\begin{codebox}[python]
+import random
+def flip_coin():
+    if random.randint(0, 1) == 0:
+        return "Heads"
+    else:
+        return "Tails"
+def flip_is_heads():
+    return flip_coin() == "Heads"
+\end{codebox}
+
+如果我想抛 20 次硬币，看看结果是否连续都是正面，我可以使用一个简单的列表推导式（见 Item 40：用推导式代替 \texttt{map} 和 \texttt{filter}），并用 \texttt{in} 运算符做成员测试（见 Item 57：从 \texttt{collections.abc} 类继承以定义自定义容器类型）：
+
+\begin{codebox}[python]
+flips = [flip_is_heads() for _ in range(20)]
+all_heads = False not in flips
+\end{codebox}
+
+然而，连续 20 次抛硬币全部是正面的概率大约只有百万分之一——极其罕见。如果抛硬币的操作开销很大，那么在列表推导式中，即便已经看到了反面结果，它仍然会继续抛硬币，几乎必然会在不必要的计算上浪费大量资源。我可以通过将循环改为：只要一出现非正面的结果就立即终止这一连串的抛硬币动作，从而改善这种状况：
+
+\begin{codebox}[python]
+all_heads = True
+for _ in range(100):
+    if not flip_is_heads():
+        all_heads = False
+        break
+\end{codebox}
+
+尽管这段代码更高效，但它比之前的列表推导式要长得多。为了在保持代码简短的同时也能提前结束执行，我可以使用 \texttt{all} 内置函数。\texttt{all} 会逐个遍历一个迭代器，检查每一项是否为真值（相关背景见 Item 7：用条件表达式处理简单的行内逻辑），一旦遇到非真值就立即停止处理。\texttt{all} 总是返回一个 \texttt{True} 或 \texttt{False} 这样的布尔值，这与 \texttt{and} 逻辑运算符返回最后一个被测试的值的行为不同：
+
+\begin{codebox}[python]
+print("All truthy:")
+print(all([1, 2, 3]))
+print(1 and 2 and 3)
+print("One falsey:")
+print(all([1, 0, 3]))
+print(1 and 0 and 3)
+>>>
+All truthy:
+True
+3
+One falsey:
+False
+0
+\end{codebox}
+
+利用 \texttt{all} 内置函数，我可以用一个生成器表达式（见 Item 44：对大型列表推导式考虑使用生成器表达式）来重写抛硬币的循环。一旦 \texttt{flip\_is\_heads} 函数返回 \texttt{False}，它就会停止继续抛硬币：
+
+\begin{codebox}[python]
+all_heads = all(flip_is_heads() for _ in range(20))
+\end{codebox}
+
+关键在于，如果我传入的是列表推导式而不是生成器表达式——注意这里出现了外围的 \texttt{[} 和 \texttt{]} 方括号——代码会先创建一个包含 20 个抛硬币结果的列表，再把它们传给 \texttt{all} 函数。计算出的结果虽然相同，但代码的性能会差得多：
+
+\begin{codebox}[python]
+all_heads = all([flip_is_heads() for _ in range(20)])  # 错误
+\end{codebox}
+
+另外，我也可以使用一个会产出值的生成器函数（见 Item 43：考虑用生成器代替返回列表），或者任何其他类型的迭代器，来达到类似的效率：
+
+\begin{codebox}[python]
+def repeated_is_heads(count):
+    for _ in range(count):
+        yield flip_is_heads()  # 生成器
+all_heads = all(repeated_is_heads(20))
+\end{codebox}
+
+一旦 \texttt{repeated\_is\_heads} 产出一个 \texttt{False} 值，\texttt{all} 内置函数就会停止推进这个生成器迭代器，并直接返回 \texttt{False}。传给 \texttt{all} 的那个生成器迭代器引用会被丢弃并触发垃圾回收，从而保证这个循环永远不会完整执行完（细节见 Item 89：总是把资源传入生成器，并让调用方在外部完成清理）。
+
+有时，你会遇到一个与 \texttt{flip\_is\_heads} 行为相反的函数：大部分时间返回 \texttt{False}，只有满足某个条件时才返回 \texttt{True}。下面我定义一个具有这种行为的函数：
+
+\begin{codebox}[python]
+def flip_is_tails():
+    return flip_coin() == "Tails"
+\end{codebox}
+
+为了用这个函数来检测连续的正面，\texttt{all} 就不管用了。取而代之，我可以使用 \texttt{any} 内置函数。\texttt{any} 同样会逐个遍历一个迭代器，但它会在看到第一个真值时就终止。\texttt{any} 也总是返回一个布尔值，这与它所镜像的 \texttt{or} 逻辑运算符不同：
+
+\begin{codebox}[python]
+print("All falsey:")
+print(any([0, False, None]))
+print(0 or False or None)
+print("One truthy:")
+print(any([None, 3, 0]))
+print(None or 3 or 0)
+>>>
+All falsey:
+False
+None
+One truthy:
+True
+3
+\end{codebox}
+
+借助 \texttt{any}，我可以在生成器表达式中使用 \texttt{flip\_is\_tails}，算出和之前相同的结果：
+
+\begin{codebox}[python]
+all_heads = not any(flip_is_tails() for _ in range(20))
+\end{codebox}
+
+或者，我也可以创建一个类似的生成器函数：
+
+\begin{codebox}[python]
+def repeated_is_tails(count):
+    for _ in range(count):
+        yield flip_is_tails()
+all_heads = not any(repeated_is_tails(20))
+\end{codebox}
+
+应该在什么时候选择 \texttt{any} 而不是 \texttt{all} 呢？这取决于你具体在做什么，以及测试你所关心的条件的难易程度。如果你想在遇到 \texttt{True} 值时提前结束，就用 \texttt{any}；如果你想在遇到 \texttt{False} 值时提前结束，就用 \texttt{all}。归根结底，这两个内置函数是等价的，布尔逻辑中的德·摩根定律（De Morgan's laws）可以证明这一点：
+
+\begin{codebox}[python]
+for a in (True, False):
+    for b in (True, False):
+        assert any([a, b]) == (not all([not a, not b]))
+        assert all([a, b]) == (not any([not a, not b]))
+\end{codebox}
+
+无论如何，你都应当能够找到一种方法，通过恰当地使用 \texttt{any} 或 \texttt{all}，来最小化所执行的工作量。
+
+此外，还有更多的内置模块能够以智能化的方式操作迭代器和生成器，从而最大限度地提升性能与效率（见 Item 24：考虑用 \texttt{itertools} 处理迭代器和生成器）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{all} 内置函数在所有提供的项都为真值时返回 \texttt{True}。一旦遇到非真值项，它就立即停止处理输入并返回 \texttt{False}。
+\item \texttt{any} 内置函数的工作方式类似，但逻辑相反：如果所有项都为非真值，它返回 \texttt{False}；而一旦看到真值项，它就以 \texttt{True} 提前结束。
+\item \texttt{any} 和 \texttt{all} 总是返回 \texttt{True} 或 \texttt{False} 这样的布尔值，这与 \texttt{or} 和 \texttt{and} 逻辑运算符不同，后者返回的是最后一个需要被测试的项。
+\item 在使用 \texttt{any} 或 \texttt{all} 时，如果传入的是列表推导式而不是生成器表达式，就会削弱这两个函数带来的效率优势。
+\end{itemize}
+
+\section{Item 24: 考虑用 itertools 处理迭代器与生成器}
+
+内置模块 \texttt{itertools} 包含大量函数，可用于组织并操作迭代器（iterator）（背景知识请参见 Item 43（"考虑用生成器代替返回列表"）与 Item 21（"迭代参数时保持防御性"））：
+
+\begin{codebox}[python]
+import itertools
+\end{codebox}
+
+每当你写出棘手的迭代（iteration）代码时，都值得重新查阅 \texttt{itertools} 的文档，看看里面有没有可供使用的函数（参见 https://docs.python.org/3/library/itertools.html ）。接下来几节将按三大类，介绍你应当了解的几个最重要的函数。
+
+\subsection{将迭代器链接在一起}
+
+内置模块 \texttt{itertools} 包含多个用于将迭代器链接在一起的函数。
+
+\begin{codebox}[python]
+chain
+\end{codebox}
+
+使用 \texttt{chain} 可将多个迭代器合并为一个顺序迭代器。本质上，它会把提供的输入迭代器扁平化为一个包含各项的迭代器：
+
+\begin{codebox}[python]
+it = itertools.chain([1, 2, 3], [4, 5, 6])
+print(list(it))
+>>>
+[1, 2, 3, 4, 5, 6]
+\end{codebox}
+
+这个函数还有一个替代版本 \texttt{chain.from\_iterable}，它会消费一个「迭代器的迭代器」，并产出一个扁平化的输出迭代器，其中包含全部输入迭代器的内容：
+
+\begin{codebox}[python]
+it1 = [i * 3 for i in ("a", "b", "c")]
+it2 = [j * 2 for j in ("x", "y", "z")]
+nested_it = [it1, it2]
+output_it = itertools.chain.from_iterable(nested_it)
+print(list(output_it))
+>>>
+['aaa', 'bbb', 'ccc', 'xx', 'yy', 'zz']
+\end{codebox}
+
+\begin{codebox}[python]
+repeat
+\end{codebox}
+
+使用 \texttt{repeat} 可以无限次输出同一个值，也可以通过第二个可选参数指定最大重复次数：
+
+\begin{codebox}[python]
+it = itertools.repeat("hello", 3)
+print(list(it))
+>>>
+['hello', 'hello', 'hello']
+\end{codebox}
+
+\begin{codebox}[python]
+cycle
+\end{codebox}
+
+使用 \texttt{cycle} 可以无限循环地重复某个迭代器中的各项：
+
+\begin{codebox}[python]
+it = itertools.cycle([1, 2])
+result = [next(it) for _ in range(10)]
+print(result)
+>>>
+[1, 2, 1, 2, 1, 2, 1, 2, 1, 2]
+\end{codebox}
+
+\begin{codebox}[python]
+tee
+\end{codebox}
+
+使用 \texttt{tee} 可以把单个迭代器拆分为由第二个参数指定数量的并行迭代器。如果这些迭代器的推进速度不一致，本函数的内存占用就会增大，因为需要缓冲来临时保存尚未消费的条目：
+
+\begin{codebox}[python]
+it1, it2, it3 = itertools.tee(["first", "second"], 3)
+print(list(it1))
+print(list(it2))
+print(list(it3))
+>>>
+['first', 'second']
+['first', 'second']
+['first', 'second']
+\end{codebox}
+
+\begin{codebox}[python]
+zip_longest
+\end{codebox}
+
+内置函数 \texttt{zip} 的这个变体，在某个迭代器耗尽时会返回一个占位值——当各个迭代器长度不同时就可能出现这种情况（关于 \texttt{strict} 参数如何提供类似行为，请参见 Item 18（"使用 zip 并行处理迭代器"））：
+
+\begin{codebox}[python]
+keys = ["one", "two", "three"]
+values = [1, 2]
+normal = list(zip(keys, values))
+print("zip:        ", normal)
+it = itertools.zip_longest(keys, values, fillvalue="nope")
+longest = list(it)
+print("zip_longest:", longest)
+>>>
+zip:         [('one', 1), ('two', 2)]
+zip_longest: [('one', 1), ('two', 2), ('three', 'nope')]
+\end{codebox}
+
+\subsection{从迭代器中过滤出条目}
+
+内置模块 \texttt{itertools} 包含多个用于从迭代器中过滤出条目的函数。
+
+\begin{codebox}[python]
+islice
+\end{codebox}
+
+使用 \texttt{islice} 可以按数值索引对迭代器进行切片，且不会复制数据。你可以指定结束位置，或指定起止位置，又或者指定起始、结束与步长。\texttt{islice} 的行为类似于标准序列的切片与跨步（striding）（参见 Item 14（"了解如何对序列切片"）与 Item 15（"避免在单个表达式中进行跨步与切片"））：
+
+\begin{codebox}[python]
+values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+first_five = itertools.islice(values, 5)
+print("First five: ", list(first_five))
+middle_odds = itertools.islice(values, 2, 8, 2)
+print("Middle odds:", list(middle_odds))
+>>>
+First five:  [1, 2, 3, 4, 5]
+Middle odds: [3, 5, 7]
+\end{codebox}
+
+\begin{codebox}[python]
+takewhile
+\end{codebox}
+
+\texttt{takewhile} 会从迭代器中持续返回各项，直到某个条目的谓词函数（predicate）返回 \texttt{False}；此后迭代器中的全部剩余项都会被消费掉但不会被返回（关于如何定义谓词，请参见 Item 39（"优先用 functools.partial 而非 lambda 表达式编写粘合函数"））：
+
+\begin{codebox}[python]
+values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+less_than_seven = lambda x: x < 7
+it = itertools.takewhile(less_than_seven, values)
+print(list(it))
+>>>
+[1, 2, 3, 4, 5, 6]
+\end{codebox}
+
+\begin{codebox}[python]
+dropwhile
+\end{codebox}
+
+\texttt{dropwhile} 与 \texttt{takewhile} 相反：它会跳过迭代器中的各项，直到谓词函数首次返回 \texttt{False}，此后迭代器中的全部剩余项都会被返回：
+
+\begin{codebox}[python]
+values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+less_than_seven = lambda x: x < 7
+it = itertools.dropwhile(less_than_seven, values)
+print(list(it))
+>>>
+[7, 8, 9, 10]
+\end{codebox}
+
+\begin{codebox}[python]
+filterfalse
+\end{codebox}
+
+\texttt{filterfalse} 与内置函数 \texttt{filter} 相反：当谓词函数返回 \texttt{False} 时，它会返回迭代器中的全部对应项：
+
+\begin{codebox}[python]
+values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+evens = lambda x: x % 2 == 0
+filter_result = filter(evens, values)
+print("Filter:      ", list(filter_result))
+filter_false_result = itertools.filterfalse(evens, values)
+print("Filter false:", list(filter_false_result))
+>>>
+Filter:       [2, 4, 6, 8, 10]
+Filter false: [1, 3, 5, 7, 9]
+\end{codebox}
+
+\subsection{生成迭代器中条目的组合}
+
+内置模块 \texttt{itertools} 包含多个用于生成迭代器中条目组合的函数。
+
+\begin{codebox}[python]
+batched
+\end{codebox}
+
+使用 \texttt{batched} 可以创建一个迭代器，从单个输入迭代器中输出固定大小、互不重叠的条目分组。第二个参数是批次大小（batch size）。在需要为提升效率而批量处理数据，或需要满足数据大小上限等其他约束时，这个函数尤为有用：
+
+\begin{codebox}[python]
+it = itertools.batched([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)
+print(list(it))
+>>>
+[(1, 2, 3), (4, 5, 6), (7, 8, 9)]
+\end{codebox}
+
+如果条目总数无法被整除，迭代器产出的最后一组可能会小于指定的批次大小：
+
+\begin{codebox}[python]
+it = itertools.batched([1, 2, 3], 2)
+print(list(it))
+>>>
+[(1, 2), (3,)]
+\end{codebox}
+
+\begin{codebox}[python]
+pairwise
+\end{codebox}
+
+当你需要遍历输入迭代器中每一对相邻条目时，可以使用 \texttt{pairwise}。这些配对是相互重叠的，因此除两端以外的每个条目都会在输出迭代器中出现两次：一次作为配对的第一个位置，另一次作为第二个位置。在编写需要依次经过顺序顶点（vertex）或端点的图遍历（graph-traversal）算法时，这会很有帮助：
+
+\begin{codebox}[python]
+route = ["Los Angeles", "Bakersfield", "Modesto", "Sacramento"]
+it = itertools.pairwise(route)
+print(list(it))
+>>>
+[('Los Angeles', 'Bakersfield'), ('Bakersfield', 'Modesto'),
+('Modesto', 'Sacramento')]
+\end{codebox}
+
+\begin{codebox}[python]
+accumulate
+\end{codebox}
+
+\texttt{accumulate} 会对迭代器中的每一项应用一个接收两个参数的函数，将其折叠（fold）进一个累积值中。对于每一个输入值，它都会输出当前的累积结果：
+
+\begin{codebox}[python]
+values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+sum_reduce = itertools.accumulate(values)
+print("Sum:   ", list(sum_reduce))
+def sum_modulo_20(first, second):
+    output = first + second
+    return output % 20
+modulo_reduce = itertools.accumulate(values, sum_modulo_20)
+print("Modulo:", list(modulo_reduce))
+>>>
+Sum:    [1, 3, 6, 10, 15, 21, 28, 36, 45, 55]
+Modulo: [1, 3, 6, 10, 15, 1, 8, 16, 5, 15]
+\end{codebox}
+
+这本质上与内置模块 \texttt{functools} 中的 \texttt{reduce} 函数相同，区别在于它是一次产出一个输出。若未指定二元函数，默认会对输入求和。
+
+\begin{codebox}[python]
+product
+\end{codebox}
+
+\texttt{product} 会返回一个或多个迭代器中条目的笛卡尔积（Cartesian product），它是深层嵌套列表推导式（comprehension）的绝佳替代品（关于为何应避免嵌套推导式，请参见 Item 41（"推导式中控制子表达式不要超过两个"））：
+
+\begin{codebox}[python]
+single = itertools.product([1, 2], repeat=2)
+print("Single:  ", list(single))
+multiple = itertools.product([1, 2], ["a", "b"])
+print("Multiple:", list(multiple))
+>>>
+Single:   [(1, 1), (1, 2), (2, 1), (2, 2)]
+Multiple: [(1, 'a'), (1, 'b'), (2, 'a'), (2, 'b')]
+\end{codebox}
+
+\begin{codebox}[python]
+permutations
+\end{codebox}
+
+\texttt{permutations} 会使用迭代器中的条目，返回长度为 N（即第二个参数）的唯一有序排列（permutation）：
+
+\begin{codebox}[python]
+it = itertools.permutations([1, 2, 3, 4], 2)
+print(list(it))
+>>>
+[(1, 2),
+ (1, 3),
+ (1, 4),
+ (2, 1),
+ (2, 3),
+ (2, 4),
+ (3, 1),
+ (3, 2),
+ (3, 4),
+ (4, 1),
+ (4, 2),
+ (4, 3)]
+\end{codebox}
+
+\begin{codebox}[python]
+combinations
+\end{codebox}
+
+\texttt{combinations} 会使用迭代器中的不重复条目，返回长度为 N（即第二个参数）的无序组合（combination）：
+
+\begin{codebox}[python]
+it = itertools.combinations([1, 2, 3, 4], 2)
+print(list(it))
+>>>
+[(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+\end{codebox}
+
+\begin{codebox}[python]
+combinations_with_replacement
+\end{codebox}
+
+\texttt{combinations\_with\_replacement} 与 \texttt{combinations} 类似，但允许重复值。它与 \texttt{permutations} 函数的区别在于，本版本允许同一个输入在输出分组中多次重复出现（即下例输出中的 \texttt{(1, 1)}）：
+
+\begin{codebox}[python]
+it = itertools.combinations_with_replacement([1, 2, 3, 4], 2)
+print(list(it))
+>>>
+[(1, 1),
+ (1, 2),
+ (1, 3),
+ (1, 4),
+ (2, 2),
+ (2, 3),
+ (2, 4),
+ (3, 3),
+ (3, 4),
+ (4, 4)]
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 内置模块 \texttt{itertools} 中的函数可分为三大类，用于处理迭代器（iterator）与生成器（generator）：将迭代器链接在一起、过滤其输出的条目，以及生成条目的组合。
+\item 官方文档中还提供了更进阶的函数、额外的参数以及实用的配方（recipe）。
+\end{itemize}

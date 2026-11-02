@@ -1,0 +1,1377 @@
+程序员在 Python 中使用的第一个组织工具是函数。与其他编程语言一样，函数让你能把大型程序拆分成更小、更简单的组件，并赋予其名称以表达用途。它们提升可读性，让代码更易上手，也便于复用与重构。
+
+Python 中的函数拥有多种多样的额外特性，让程序员的生活更轻松。其中一些与其他编程语言的能力相似，但许多是 Python 独有的。这些额外特性能够让函数的接口更清晰，消除干扰、强化调用者的意图，并能显著减少那些难以发现的细微错误。
+
+\section{Item 30: 了解函数参数可能被修改}
+
+Python 不支持指针类型（除了与 C 交互，见 Item 95（"考虑使用 \texttt{ctypes} 快速集成原生库"））。但是，传给函数的参数都是按引用传递的。对于整数和字符串这样的简单类型，参数看起来像是按值传递的，因为它们是不可变对象（immutable object）。但更复杂的对象在传给其他函数时，无论调用者的意图如何，都可能被修改。
+
+例如，如果我把一个列表传给另一个函数，那个函数就能对该参数调用修改方法：
+
+\begin{codebox}[python]
+def my_func(items):
+    items.append(4)
+x = [1, 2, 3]
+my_func(x)
+print(x)  # 4 现在已在列表中
+>>>
+[1, 2, 3, 4]
+\end{codebox}
+
+在这种情况下，你无法在被调用函数内部替换变量 \texttt{x} 的原始值，就像使用 C 风格的指针类型那样。但你可以对赋值给 \texttt{x} 的列表进行修改。
+
+类似地，当一个变量被赋值给另一个变量时，它保存的是对同一底层数据结构的引用（reference），或者说别名（alias）。因此，用一个看似独立的变量去调用函数，实际上允许修改原始对象：
+
+\begin{codebox}[python]
+a = [7, 6, 5]
+b = a          # 创建一个别名
+my_func(b)
+print(a)       # 4 现在已在列表中
+>>>
+[7, 6, 5, 4]
+\end{codebox}
+
+对于列表和字典，你可以通过传入容器的副本来规避这个问题，从而将自身与函数的行为隔离开来。这里，我通过使用不带起始和结束索引的切片操作来创建副本（见 Item 14（"了解如何对序列切片"））：
+
+\begin{codebox}[python]
+def capitalize_items(items):
+    for i in range(len(items)):
+        items[i] = items[i].capitalize()
+my_items = ["hello", "world"]
+items_copy = my_items[:]  # 创建一个副本
+capitalize_items(items_copy)
+print(items_copy)
+>>>
+['Hello', 'World']
+\end{codebox}
+
+字典（dictionary）内置类型为此专门提供了 \texttt{copy} 方法：
+
+\begin{codebox}[python]
+def concat_pairs(items):
+    for key in items:
+        items[key] = f"{key}={items[key]}"
+my_pairs = {"foo": 1, "bar": 2}
+pairs_copy = my_pairs.copy()  # 创建一个副本
+concat_pairs(pairs_copy)
+print(pairs_copy)
+>>>
+{'foo': 'foo=1', 'bar': 'bar=2'}
+\end{codebox}
+
+用户自定义类（见 Item 29（"组合类，而非深度嵌套字典、列表和元组"））也可能被调用者修改。它们内部的任何属性，都可以被传给它的任何函数访问或赋值（见 Item 55（"优先使用公有属性而非私有属性"））：
+
+\begin{codebox}[python]
+class MyClass:
+    def __init__(self, value):
+        self.value = value
+x = MyClass(10)
+def my_func(obj):
+    obj.value = 20  # 修改对象
+my_func(x)
+print(x.value)
+>>>
+20
+\end{codebox}
+
+在实现供他人调用的函数时，除非在函数名、参数名或文档中明确说明了该行为，否则你不应修改任何传入的可变值。你可能还想对收到的任何参数做防御性拷贝（defensive copy），以避免迭代时的各种陷阱（见 Item 21（"迭代参数时要保持防御性"）以及 Item 22（"绝不要在迭代容器的同时修改它们，应改用副本或缓存"））。
+
+在调用函数时，你要小心传入可变参数，因为你的数据可能会被修改，从而导致难以察觉的 bug。对于你掌控的复杂对象，添加便于创建防御性拷贝的辅助函数和方法会很有用。或者，你可以采用更具函数式（functional）的风格，并尝试借助不可变对象和纯函数（见 Item 56（"优先使用 \texttt{dataclasses} 创建不可变对象"））。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item Python 中的参数是按引用传递的，这意味着接收它们的函数和方法可以修改其属性。
+\item 函数应在会修改输入参数时（通过命名和文档）说清楚，否则应避免修改参数。
+\item 对你收到的集合和对象创建副本，是确保函数不会无意中修改数据的可靠方法。
+\end{itemize}
+
+\section{Item 31: 返回专用结果对象，而非要求调用者解包超过三个变量}
+
+解包语法（unpacking syntax，见 Item 5（"优先使用多重赋值解包而非索引"））的一个效果是，它让 Python 函数看起来可以返回多个值。例如，假设我想确定一群短吻鳄（alligator）种群的各项统计量。给定一组长度列表，我需要计算该种群的最小和最大长度。这里，我用一个看似返回两个值的函数来完成这件事：
+
+\begin{codebox}[python]
+def get_stats(numbers):
+    minimum = min(numbers)
+    maximum = max(numbers)
+    return minimum, maximum
+lengths = [63, 73, 72, 60, 67, 66, 71, 61, 72, 70]
+minimum, maximum = get_stats(lengths)  # 两个返回值
+print(f"Min: {minimum}, Max: {maximum}")
+>>>
+Min: 60, Max: 73
+\end{codebox}
+
+其工作方式是：多个值被一起放在一个两元素的元组（tuple）中返回。调用方代码随后通过为两个变量赋值来解包返回的元组。这里，我用了一个更简单的例子来展示解包语句和多返回值函数的工作方式是相同的：
+
+\begin{codebox}[python]
+first, second = 1, 2
+assert first == 1
+assert second == 2
+def my_function():
+    return 1, 2
+first, second = my_function()
+assert first == 1
+assert second == 2
+\end{codebox}
+
+多返回值也可以用星号表达式（starred expression）来接收，实现兜底解包（catch-all unpacking，见 Item 16（"优先使用兜底解包而非切片"））。例如，假设我需要另一个函数，用来计算每个短吻鳄相对于种群平均值的体型比例。这个函数返回一个比例列表，但我可以通过对列表中间部分使用星号表达式，分别接收最大和最小的项：
+
+\begin{codebox}[python]
+def get_avg_ratio(numbers):
+    average = sum(numbers) / len(numbers)
+    scaled = [x / average for x in numbers]
+    scaled.sort(reverse=True)
+    return scaled
+longest, *middle, shortest = get_avg_ratio(lengths)
+print(f"Longest:  {longest:>4.0%}")
+print(f"Shortest: {shortest:>4.0%}")
+>>>
+Longest:  108%
+Shortest:  89%
+\end{codebox}
+
+现在，假设程序需求发生变化，我还需要确定短吻鳄的平均长度、中位数长度以及种群总数。我可以通过扩展 \texttt{get\_stats} 函数，让它也计算这些统计量，并在调用者解包的结果元组（tuple）中返回它们：
+
+\begin{codebox}[python]
+def get_median(numbers):
+    count = len(numbers)
+    sorted_numbers = sorted(numbers)
+    middle = count // 2
+    if count % 2 == 0:
+        lower = sorted_numbers[middle - 1]
+        upper = sorted_numbers[middle]
+        median = (lower + upper) / 2
+    else:
+        median = sorted_numbers[middle]
+    return median
+def get_stats_more(numbers):
+    minimum = min(numbers)
+    maximum = max(numbers)
+    count = len(numbers)
+    average = sum(numbers) / count
+    median = get_median(numbers)
+    return minimum, maximum, average, median, count
+minimum, maximum, average, median, count =
+    get_stats_more(lengths)
+print(f"Min: {minimum}, Max: {maximum}")
+print(f"Average: {average}, Median: {median}, Count {count}")
+>>>
+Min: 60, Max: 73
+Average: 67.5, Median: 68.5, Count 10
+\end{codebox}
+
+这段代码有两个问题。首先，所有返回值都是数值，因此很容易在无意中把它们调换顺序（例如，把平均值和中位数互换），从而导致日后难以察觉的 bug。使用大量返回值极其容易出错：
+
+\begin{codebox}[python]
+# 正确：
+minimum, maximum, average, median, count =
+    get_stats_more(lengths)
+# 哎呀！中位数和平均值被调换了：
+minimum, maximum, median, average, count =
+    get_stats_more(lengths)
+\end{codebox}
+
+其次，调用函数并解包这些值的那一行很长，很可能需要以各种方式换行（出于 PEP 8 风格要求，见 Item 2（"遵循 PEP 8 风格指南"）），这会损害可读性：
+
+\begin{codebox}[python]
+minimum, maximum, average, median, count = get_stats_more(
+    lengths)
+minimum, maximum, average, median, count =
+    get_stats_more(lengths)
+(minimum, maximum, average,
+ median, count) = get_stats_more(lengths)
+(minimum, maximum, average, median, count
+    ) = get_stats_more(lengths)
+\end{codebox}
+
+为了避免这些问题，在解包函数的多个返回值时，你永远不应该使用超过三个变量。这些变量可以是一个三元组的各个独立值、两个变量加一个兜底的星号表达式，或者更少的任何形式。
+
+如果需要解包的返回值超过这个数，你最好定义一个轻量级类（见 Item 29（"组合类，而非深度嵌套字典、列表和元组"）以及 Item 51（"优先使用 \texttt{dataclasses} 定义轻量级类"）），并让你的函数返回它的一个实例。这里，我重写了 \texttt{get\_stats} 函数的另一个版本，让它返回一个结果对象而非元组：
+
+\begin{codebox}[python]
+from dataclasses import dataclass
+@dataclass
+class Stats:
+    minimum: float
+    maximum: float
+    average: float
+    median: float
+    count: int
+def get_stats_obj(numbers):
+    return Stats(
+        minimum=min(numbers),
+        maximum=max(numbers),
+        count=len(numbers),
+        average=sum(numbers) / count,
+        median=get_median(numbers),
+    )
+result = get_stats_obj(lengths)
+print(result)
+>>>
+Stats(minimum=60, maximum=73, average=67.5, median=68.5,
+count=10)
+\end{codebox}
+
+这样的代码更清晰、更不容易出错，日后也更容易重构。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 你可以把多个值放进一个元组，让调用者利用 Python 的解包语法，从而使函数返回多个值。
+\item 函数的多个返回值也可以用兜底的星号表达式来解包。
+\item 解包到四个或更多变量容易出错，应当避免；相反，应返回一个轻量级类的实例。
+\end{itemize}
+
+\section{Item 32: 优先抛出异常而非返回 None}
+
+在编写工具函数时，Python 程序员很容易忍不住给返回值 \texttt{None} 赋予特殊含义。在某些情况下这似乎说得通（参见 Item 26（"优先用 \texttt{get} 而非 \texttt{in} 和 \texttt{KeyError} 处理缺失的字典键"））。例如，假设我想要一个把一个数除以另一个数的辅助函数。当除数为零时，返回 \texttt{None} 看起来很自然，因为结果是未定义的：
+
+\begin{codebox}[python]
+def careful_divide(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return None
+\end{codebox}
+
+使用这个函数的代码可以相应地解读返回值：
+
+\begin{codebox}[python]
+x, y = 1, 0
+result = careful_divide(x, y)
+if result is None:
+    print("Invalid inputs")
+\end{codebox}
+
+当 \texttt{careful\_divide} 函数的分子为零时会发生什么？如果分母不为零，那么函数会返回零。问题在于，当你在诸如 \texttt{if} 语句这样的条件中求值结果时，返回零会引起问题。你可能会不小心去寻找任何为假（falsey）的值来指示错误，而不是只去寻找 \texttt{None}（参见 Item 4（"用辅助函数代替复杂表达式"）和 Item 7（"考虑用条件表达式处理简单的内联逻辑"））：
+
+\begin{codebox}[python]
+x, y = 0, 5
+result = careful_divide(x, y)
+if not result:               # 已修改
+    print("Invalid inputs")  # 这被执行了！但不应该
+>>>
+Invalid inputs
+\end{codebox}
+
+当 \texttt{None} 具有特殊含义时，这种对等价于 \texttt{False} 的返回值的误读，是 Python 代码中一个常见的错误。这就是为什么像 \texttt{careful\_divide} 这样的函数返回 \texttt{None} 容易引发错误。有两种方法可以降低这类错误的发生概率。
+
+第一种方法是将返回值拆成一个二元素元组（背景参见 Item 31（"返回专用的结果对象，而非要求函数调用者解包超过三个变量"））。元组的第一个部分表明操作成功还是失败。第二个部分是计算出的实际结果：
+
+\begin{codebox}[python]
+def careful_divide(a, b):
+    try:
+        return True, a / b
+    except ZeroDivisionError:
+        return False, None
+\end{codebox}
+
+这个函数的调用者必须解包该元组。这会迫使他们考虑元组的状态部分，而不只是看除法的结果：
+
+\begin{codebox}[python]
+success, result = careful_divide(x, y)
+if not success:
+    print("Invalid inputs")
+\end{codebox}
+
+问题在于，调用者可以轻易地忽略元组的第一个部分（使用下划线变量名，这是 Python 中表示未使用变量的约定）。得到的代码乍一看没什么问题，但这可能和返回 \texttt{None} 一样容易出错：
+
+\begin{codebox}[python]
+_, result = careful_divide(x, y)
+if not result:
+    print("Invalid inputs")
+\end{codebox}
+
+第二种、也是更好的降低这些错误的方法是：永远不要为特殊情况返回 \texttt{None}。相反，应当向调用者抛出异常，让调用者去处理。这里，我把 \texttt{ZeroDivisionError} 转换成 \texttt{ValueError}，以向调用者表明输入值有问题（详见 Item 88（"考虑显式地链接异常以澄清回溯"）和 Item 121（"定义根异常，将调用者与 API 隔离"））：
+
+\begin{codebox}[python]
+def careful_divide(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        raise ValueError("Invalid inputs")  # 已修改
+\end{codebox}
+
+调用者不再需要对函数的返回值加条件判断。相反，它可以假定返回值始终有效，并立即在 \texttt{try} 之后的 \texttt{else} 代码块中使用结果（背景参见 Item 80（"充分利用 \texttt{try}/\texttt{except}/\texttt{else}/\texttt{finally} 中的每个代码块"））：
+
+\begin{codebox}[python]
+x, y = 5, 2
+try:
+    result = careful_divide(x, y)
+except ValueError:
+    print("Invalid inputs")
+else:
+    print(f"Result is {result:.1f}")
+>>>
+Result is 2.5
+\end{codebox}
+
+这种方法可以扩展到使用类型标注（type annotation）的代码（背景参见 Item 124（"考虑通过 \texttt{typing} 进行静态分析以消除缺陷"））。你可以指定函数的返回值始终是一个 \texttt{float}，因而永远不会是 \texttt{None}。然而，Python 渐进式类型（gradual typing）刻意不提供一种方式来表明异常何时属于函数接口的一部分（也称为受检异常（checked exception））。相反，你必须把抛异常的行为记录下来，并期望调用者依赖这份文档，从而知道他们应当计划捕获哪些异常（参见 Item 118（"为每个函数、类和模块编写文档字符串"））。
+
+综合起来，下面是这个函数在同时使用类型标注和文档字符串时应该有的样子：
+
+\begin{codebox}[python]
+def careful_divide(a: float, b: float) -> float:
+    """Divides a by b.
+    Raises:
+        ValueError: When the inputs cannot be divided.
+    """
+    try:
+        return a / b
+    except ZeroDivisionError:
+        raise ValueError("Invalid inputs")
+try:
+    result = careful_divide(1, 0)
+except ValueError:
+    print("Invalid inputs")  # 预期
+else:
+    print(f"Result is {result:.1f}")
+>>>
+$ python3 -m mypy --strict example.py
+Success: no issues found in 1 source file
+\end{codebox}
+
+现在，输入、输出和异常行为都一清二楚，调用者做错事的概率极低。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 返回 \texttt{None} 以表示特殊含义的函数容易出错，因为在布尔表达式中，\texttt{None} 和许多其他值（例如零和空字符串）都会被求值为 \texttt{False}。
+\item 抛出异常来指示特殊情况，而不是返回 \texttt{None}。当异常被记录在文档中时，应当期望调用代码正确地处理它们。
+\item 类型标注可以用来清楚地表明，函数永远不会返回 \texttt{None} 这个值，即使在特殊情况下也是如此。
+\end{itemize}
+
+\section{Item 33: 了解闭包如何与变量作用域及 nonlocal 交互}
+
+假设我想对一组数字排序，但让某一组数字优先排到前面。当你在渲染用户界面、并希望重要消息或特殊事件先于其他一切显示时，这种模式很有用。一种常见的做法是将一个辅助函数作为 \texttt{key} 参数传给列表的 \texttt{sort} 方法（详见 Item 100（"使用 \texttt{key} 参数按复杂条件排序"））。该辅助函数的返回值将用作列表里每个元素的排序依据。这个辅助函数可以检查给定元素是否在重要分组中，并相应地改变排序值：
+
+\begin{codebox}[python]
+def sort_priority(values, group):
+    def helper(x):
+        if x in group:
+            return (0, x)
+        return (1, x)
+    values.sort(key=helper)
+\end{codebox}
+
+这个函数对简单输入是有效的：
+
+\begin{codebox}[python]
+numbers = [8, 3, 1, 2, 5, 4, 7, 6]
+group = {2, 3, 5, 7}
+sort_priority(numbers, group)
+print(numbers)
+>>>
+[2, 3, 5, 7, 1, 4, 6, 8]
+\end{codebox}
+
+这个函数能如预期般工作，原因有三：
+
+\begin{itemize}
+\item Python 支持闭包（closure）——也就是说，函数可以引用定义它们时所在作用域中的变量。这就是 \texttt{helper} 函数能够访问 \texttt{sort\_priority} 函数的 \texttt{group} 参数的原因。
+\item 在 Python 中，函数是一等对象（first-class object），这意味着你可以直接引用它们、把它们赋值给变量、把它们作为实参传给其他函数、在表达式和 \texttt{if} 语句中比较它们，等等。这就是 \texttt{sort} 方法能够接受一个闭包函数作为 \texttt{key} 参数的方式。
+\item Python 在比较序列（包括元组）时有特定的规则。它先比较索引为零的元素；然后，如果它们相等，就比较索引为一的元素；如果仍然相等，就比较索引为二的元素，依此类推。这就是为什么来自 \texttt{helper} 闭包的返回值会让排序结果分成两个不同的组。
+\end{itemize}
+
+如果这个函数还能返回是否见过更高优先级的元素，那就更好了，这样用户界面代码就能相应地采取行动。添加这种行为看起来很简单。已经有一个闭包函数用于判断每个数字属于哪个分组。何不也利用这个闭包，在见到高优先级元素时翻转一个标志？那样，函数就能返回这个被闭包修改过的标志值。
+
+下面，我用一种看似显而易见的方式去实现它：
+
+\begin{codebox}[python]
+def sort_priority2(numbers, group):
+    found = False         # 标志初始值
+    def helper(x):
+        if x in group:
+            found = True  # 翻转标志
+            return (0, x)
+        return (1, x)
+    numbers.sort(key=helper)
+    return found          # 标志最终值
+\end{codebox}
+
+我可以用和之前相同的输入来运行这个函数：
+
+\begin{codebox}[python]
+found = sort_priority2(numbers, group)
+print("Found:", found)
+print(numbers)
+>>>
+Found: False
+[2, 3, 5, 7, 1, 4, 6, 8]
+\end{codebox}
+
+排序结果是正确的，这意味着 \texttt{group} 中的元素确实在 \texttt{numbers} 中被找到了。然而，函数返回的 \texttt{found} 结果却是 \texttt{False}，而它本应是 \texttt{True}。这怎么可能发生？
+
+当你在表达式中引用一个变量时，Python 解释器会按以下顺序遍历嵌套的作用域来解析该引用：
+
+\begin{enumerate}
+\item 当前函数的作用域
+\item 任意外层作用域（比如其他包含它的函数）
+\item 包含该代码的模块的作用域（也称为全局作用域）
+\item 内置作用域（包含像 \texttt{len} 和 \texttt{str} 这样的函数）
+\end{enumerate}
+
+如果所有这些地方都没有定义带有被引用名称的变量，那么就会抛出 \texttt{NameError} 异常：
+
+\begin{codebox}[python]
+foo = does_not_exist * 5
+>>>
+Traceback ...
+NameError: name 'does_not_exist' is not defined
+\end{codebox}
+
+给变量赋值的工作方式则不同。如果变量已经在当前作用域中定义，那么该名称会在那个作用域中取得新值。如果变量在当前作用域中不存在，Python 会把这次赋值当作变量定义。关键的是，新定义变量的作用域是包含这次赋值的那个函数，而不是更早赋值过的某个外层作用域。
+
+这种赋值行为解释了 \texttt{sort\_priority2} 函数返回错误值的原因。\texttt{found} 变量在 \texttt{helper} 闭包中被赋值为 \texttt{True}。闭包的这次赋值被当作是在 \texttt{helper} 作用域内的一个新变量定义，而不是在 \texttt{sort\_priority2} 作用域内的赋值：
+
+\begin{codebox}[python]
+def sort_priority2(numbers, group):
+    found = False          # 作用域：'sort_priority2'
+    def helper(x):
+        if x in group:
+            found = True   # 作用域：'helper' —— 错误！
+            return (0, x)
+        return (1, x)
+    numbers.sort(key=helper)
+    return found
+\end{codebox}
+
+这个问题有时被称为作用域 bug（scoping bug），因为它会让新手感到非常意外。但这种行为是有意为之的结果：它防止函数里的局部变量污染所在的模块。否则，函数里的每一次赋值都会把垃圾数据塞进全局模块作用域。那不仅会是噪音，而且由此产生的全局变量之间的相互作用还可能引发难以察觉的 bug。
+
+在 Python 中，有一种特殊语法用于向闭包作用域之外赋值。\texttt{nonlocal} 语句用于表明，对于某个特定的变量名，在赋值时应进行作用域遍历。唯一的限制是，\texttt{nonlocal} 不会向上遍历到模块级作用域（以避免污染全局变量）。
+
+下面，我再次定义同样的函数，这次使用 \texttt{nonlocal}：
+
+\begin{codebox}[python]
+def sort_priority3(numbers, group):
+    found = False
+    def helper(x):
+        nonlocal found  # 已添加
+        if x in group:
+            found = True
+            return (0, x)
+        return (1, x)
+    numbers.sort(key=helper)
+    return found
+\end{codebox}
+
+现在 \texttt{found} 标志能按预期工作了：
+
+\begin{codebox}[python]
+found = sort_priority3(numbers, group)
+print("Found:", found)
+print(numbers)
+>>>
+Found: True
+[2, 3, 5, 7, 1, 4, 6, 8]
+\end{codebox}
+
+\texttt{nonlocal} 语句清楚地表明，数据何时被从闭包中赋出、进入另一个作用域。它与 \texttt{global} 语句互补，后者表明变量的赋值应当直接进入模块作用域。
+
+然而，就像全局变量这种反模式一样，我建议不要在简单函数之外的地方使用 \texttt{nonlocal}。\texttt{nonlocal} 的副作用可能很难追踪。在长函数里尤其难以理解，因为那里的 \texttt{nonlocal} 语句和对相关变量的赋值相隔很远。
+
+当 \texttt{nonlocal} 的用法开始变得复杂时，最好把状态封装到一个辅助类里。这里，我定义一个可以像函数一样被调用的类；它通过在排序过程中给对象的属性赋值，达到了和 \texttt{nonlocal} 方法相同的结果（参见 Item 55（"优先使用公有属性而非私有属性"））：
+
+\begin{codebox}[python]
+class Sorter:
+    def __init__(self, group):
+        self.group = group
+        self.found = False
+    def __call__(self, x):
+        if x in self.group:
+            self.found = True
+            return (0, x)
+        return (1, x)
+\end{codebox}
+
+它比之前稍长一点，但如果需要，理解和扩展都要容易得多（关于 \texttt{\_\_call\_\_} 这个特殊方法，详见 Item 48（"在简单接口处接受函数而非类"））。我可以访问 \texttt{Sorter} 实例上的 \texttt{found} 属性来得到结果：
+
+\begin{codebox}[python]
+sorter = Sorter(group)
+numbers.sort(key=sorter)
+print("Found:", sorter.found)
+print(numbers)
+>>>
+Found: True
+[2, 3, 5, 7, 1, 4, 6, 8]
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 闭包函数可以引用定义它们的任意外层作用域中的变量。
+\item 默认情况下，闭包不能通过赋值来影响外层作用域。
+\item 使用 \texttt{nonlocal} 语句来表明闭包何时可以修改其外层作用域中的变量。使用 \texttt{global} 语句可以对模块级名称做同样的事。
+\item 避免把 \texttt{nonlocal} 语句用于简单函数之外的地方。
+\end{itemize}
+
+\section{Item 34: 用可变位置参数减少视觉噪音}
+
+接受可变数量的位置参数可以让函数调用更清晰，并减少视觉噪音（visual noise）。这些位置参数常被简称为 varargs（可变参数），或 star args（星号参数），这是参照参数 \texttt{*args} 的惯用名称而来的。例如，假设我想记录一些调试信息。若参数数量固定，我就需要一个接收一条消息和一个值列表的函数：
+
+\begin{codebox}[python]
+def log(message, values):
+    if not values:
+        print(message)
+    else:
+        values_str = ", ".join(str(x) for x in values)
+        print(f"{message}: {values_str}")
+log("My numbers are", [1, 2])
+log("Hi there", [])
+>>>
+My numbers are: 1, 2
+Hi there
+\end{codebox}
+
+当没有要记录的值时，还必须传入一个空列表，这既笨重又啰嗦。最好能完全省掉第二个参数。在 Python 中，我可以通过在最后一个位置参数名前加 \texttt{*} 来实现这一点。记录日志消息的第一个参数是必需的，而其后任意数量的位置参数都是可选的。函数体无需改动；只需要改动调用方即可：
+
+\begin{codebox}[python]
+def log(message, *values):   # 已修改
+    if not values:
+        print(message)
+    else:
+        values_str = ", ".join(str(x) for x in values)
+        print(f"{message}: {values_str}")
+log("My numbers are", 1, 2)
+log("Hi there")              # 已修改
+>>>
+My numbers are: 1, 2
+Hi there
+\end{codebox}
+
+这种语法与解包（unpacking）赋值语句中使用的星号表达式非常相似（更多示例参见 Item 16「Prefer Catch-All Unpacking over Slicing（优先用捕获全部的解包而非切片）」与 Item 9「Consider \texttt{match} for Destructuring in Flow Control; Avoid When \texttt{if} Statements Are Sufficient（在流程控制中用 match 解构；当 if 语句足够时避免使用）」）。
+
+如果我已经有了一个序列（如列表），并想调用像 \texttt{log} 这样的可变参数（variadic）函数，我可以用 \texttt{*} 运算符来实现。这会指示 Python 将序列中的元素作为位置参数传给函数：
+
+\begin{codebox}[python]
+favorites = [7, 33, 99]
+log("Favorite colors", *favorites)
+>>>
+Favorite colors: 7, 33, 99
+\end{codebox}
+
+接受可变数量的位置参数有两个问题。
+
+第一个问题是，这些可选的位置参数在被传入函数之前，总是先被转换成元组（tuple）。这意味着，如果函数的调用方对生成器（generator）使用了 \texttt{*} 运算符，生成器会被迭代直到耗尽（背景知识参见 Item 43「Consider Generators Instead of Returning Lists（考虑用生成器而非返回列表）」）。生成的元组包含生成器中的每一个值，这可能会消耗大量内存并导致程序崩溃：
+
+\begin{codebox}[python]
+def my_generator():
+    for i in range(10):
+        yield i
+def my_func(*args):
+    print(args)
+it = my_generator()
+my_func(*it)
+>>>
+(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+\end{codebox}
+
+接受 \texttt{*args} 的函数最适合这样一种情况：你知道参数列表中输入的数量会相当小。当函数调用要同时传入许多字面量或变量名时，\texttt{*args} 是理想选择。它主要是为了调用该函数的程序员之便利，以及提升调用代码的可读性。
+
+\texttt{*args} 的第二个问题是，你今后无法在不迁移每一个调用方的情况下，给函数添加新的位置参数。如果你尝试在参数列表的前面添加一个位置参数，那么现有的调用方如果没有更新，就会在不知不觉中出错。例如，这里我把 \texttt{sequence} 添加为函数的第一个参数，并用它来渲染日志消息：
+
+\begin{codebox}[python]
+def log_seq(sequence, message, *values):
+    if not values:
+        print(f"{sequence} - {message}")
+    else:
+        values_str = ", ".join(str(x) for x in values)
+        print(f"{sequence} - {message}: {values_str}")
+log_seq(1, "Favorites", 7, 33)      # 新增，带 *args 没问题
+log_seq(1, "Hi there")              # 仅新增消息，没问题
+log_seq("Favorite numbers", 7, 33)  # 旧用法会出错
+>>>
+1 - Favorites: 7, 33
+1 - Hi there
+Favorite numbers - 7: 33
+\end{codebox}
+
+上面代码的问题在于，第三次调用 \texttt{log} 时把 \texttt{7} 当作 \texttt{message} 参数，因为没有提供 \texttt{sequence} 参数。像这样的缺陷很难排查，因为代码仍然能运行，而不会引发任何异常（exception）。要彻底避免这种可能性，当你想扩展接受 \texttt{*args} 的函数时，应该使用仅限关键字（keyword-only）参数（参见 Item 37「Enforce Clarity with Keyword-Only and Positional-Only Arguments（用仅限关键字与仅限位置参数强制清晰）」）。为了更保险，你还可以考虑使用类型标注（type annotation）（参见 Item 124「Consider Static Analysis via \texttt{typing} to Obviate Bugs（考虑通过 typing 进行静态分析以消除缺陷）」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在 \texttt{def} 语句中使用 \texttt{*args}，可以让函数接受可变数量的位置参数。
+\item 使用 \texttt{*} 运算符，可以将序列中的元素作为函数的位置参数。
+\item 对生成器使用 \texttt{*} 运算符可能导致程序耗尽内存并崩溃。
+\item 给接受 \texttt{*args} 的函数添加新位置参数，可能引入难以察觉的缺陷。
+\end{itemize}
+
+\section{Item 35: 用关键字参数提供可选行为}
+
+与大多数其他编程语言一样，在 Python 中调用函数时，你可以按位置（position）传递参数：
+
+\begin{codebox}[python]
+def remainder(number, divisor):
+    return number % divisor
+assert remainder(20, 7) == 6
+\end{codebox}
+
+Python 函数的所有普通参数也都可以按关键字（keyword）传递，即在函数调用的括号中使用参数名进行赋值。只要指定了所有必需的位置参数，关键字参数的传递顺序可以是任意的。你可以混用关键字参数和位置参数。以下这些调用是等价的：
+
+\begin{codebox}[python]
+remainder(20, 7)
+remainder(20, divisor=7)
+remainder(number=20, divisor=7)
+remainder(divisor=7, number=20)
+\end{codebox}
+
+位置参数必须在关键字参数之前指定：
+
+\begin{codebox}[python]
+remainder(number=20, 7)
+>>>
+Traceback ...
+SyntaxError: positional argument follows keyword argument
+\end{codebox}
+
+每个参数只能指定一次：
+
+\begin{codebox}[python]
+remainder(20, number=7)
+>>>
+Traceback ...
+TypeError: remainder() got multiple values for argument
+'number'
+\end{codebox}
+
+如果你已经有了一个字典（dict）对象，并想用它里面的内容来调用 \texttt{remainder} 这样的函数，你可以用 \texttt{**} 运算符来实现。这会指示 Python 将字典中的键值对作为函数对应的关键字参数传递：
+
+\begin{codebox}[python]
+my_kwargs = {
+    "number": 20,
+    "divisor": 7,
+}
+assert remainder(**my_kwargs) == 6
+\end{codebox}
+
+在一次函数调用中，你可以将 \texttt{**} 运算符与位置参数或关键字参数混用，只要没有参数被重复指定即可：
+
+\begin{codebox}[python]
+my_kwargs = {
+    "divisor": 7,
+}
+assert remainder(number=20, **my_kwargs) == 6
+\end{codebox}
+
+如果你知道这些字典不包含重复的键（key），还可以多次使用 \texttt{**} 运算符：
+
+\begin{codebox}[python]
+my_kwargs = {
+    "number": 20,
+}
+other_kwargs = {
+    "divisor": 7,
+}
+assert remainder(**my_kwargs, **other_kwargs) == 6
+\end{codebox}
+
+而如果你想让一个函数接收任意具名的关键字参数，可以使用 \texttt{**kwargs} 这个捕获全部的参数，将这些参数收集到一个字典（dict）中，供你随后处理（关于它特别有用的场景，参见 Item 38「Define Function Decorators with \texttt{functools.wraps}（用 functools.wraps 定义函数装饰器）」）：
+
+\begin{codebox}[python]
+def print_parameters(**kwargs):
+    for key, value in kwargs.items():
+        print(f"{key} = {value}")
+print_parameters(alpha=1.5, beta=9, gamma=4)
+>>>
+alpha = 1.5
+beta = 9
+gamma = 4
+\end{codebox}
+
+关键字参数的灵活性带来了三个显著的好处。
+
+第一个好处是，关键字参数让代码的新读者更清楚地理解函数调用。在调用 \texttt{remainder(20, 7)} 时，除非查看 \texttt{remainder} 方法的实现，否则看不出哪个参数是 \texttt{number}、哪个是 \texttt{divisor}。而在使用关键字参数的调用中，\texttt{number=20} 与 \texttt{divisor=7} 立刻清楚地表明每个参数分别对应于哪个形参。
+
+关键字参数的第二个好处是，它们可以在函数定义中指定默认值。这让函数在你需要时能够提供额外的能力，而大多数时候你都可以接受默认行为。这消除了重复的代码，减少了噪音。
+
+例如，假设我想计算流入一个容器的流体速率。如果这个容器还放在秤上以测量其重量，那么我就可以利用两个不同时间点上的两次重量测量之差，来确定流量速率：
+
+\begin{codebox}[python]
+def flow_rate(weight_diff, time_diff):
+    return weight_diff / time_diff
+weight_a = 2.5
+weight_b = 3
+time_a = 1
+time_b = 4
+weight_diff = weight_b - weight_a
+time_diff = time_b - time_a
+flow = flow_rate(weight_diff, time_diff)
+print(f"{flow:.3} kg per second")
+>>>
+0.167 kg per second
+\end{codebox}
+
+在一般情况下，知道每秒钟多少千克的流量是有用的。而在另一些时候，利用最近的传感器测量值来近似更大的时间尺度（如小时或天）会很有帮助。我可以在同一个函数中，通过添加一个表示时间段缩放因子的参数来提供这种行为：
+
+\begin{codebox}[python]
+def flow_rate(weight_diff, time_diff, period):
+    return (weight_diff / time_diff) * period
+\end{codebox}
+
+问题在于，现在我每次调用函数都必须指定 \texttt{period} 参数，即便在最常见的「每秒流量」（此时 period 为 \texttt{1}）这一情况下也是如此：
+
+\begin{codebox}[python]
+flow_per_second = flow_rate(weight_diff, time_diff, 1)
+\end{codebox}
+
+为了让这一点不那么啰嗦，我可以给 \texttt{period} 参数一个默认值：
+
+\begin{codebox}[python]
+def flow_rate(weight_diff, time_diff, period=1):  # 已修改
+    return (weight_diff / time_diff) * period
+\end{codebox}
+
+现在 \texttt{period} 参数变为可选的了：
+
+\begin{codebox}[python]
+flow_per_second = flow_rate(weight_diff, time_diff)
+flow_per_hour = flow_rate(weight_diff, time_diff, period=3600)
+\end{codebox}
+
+这对于简单的、不可变（immutable）的默认值很有效；但对于像列表（list）实例和用户自定义对象这样复杂的默认值，就变得棘手了（细节参见 Item 36「Use None and Docstrings to Specify Dynamic Default Arguments（用 None 与文档字符串来指定动态默认参数）」）。
+
+使用关键字参数的第三个理由是，它们提供了一种强大的方式，在保持与现有调用方向后兼容（backward compatible）的同时扩展函数的参数。这意味着你可以在不必迁移大量现有代码的情况下提供额外的功能，从而减少了引入缺陷的机会。
+
+例如，假设我想扩展上面的 \texttt{flow\_rate} 函数，以计算除千克之外的重量单位下的流量。我可以通过添加一个提供转换率到替代计量单位的新可选参数来实现：
+
+\begin{codebox}[python]
+def flow_rate( weight_diff, time_diff,
+period=1, units_per_kg=1):
+    return ((weight_diff * units_per_kg) / time_diff) * period
+\end{codebox}
+
+\texttt{units\_per\_kg} 的默认参数值是 \texttt{1}，这使得返回的重量单位仍是千克。这意味着所有现有的调用方都不会看到行为上的变化。\texttt{flow\_rate} 的新调用方可以指定这个新的关键字参数，来看到新的行为：
+
+\begin{codebox}[python]
+pounds_per_hour = flow_rate(
+    weight_diff,
+    time_diff,
+    period=3600,
+    units_per_kg=2.2,
+)
+\end{codebox}
+
+使用这样的可选关键字参数来提供向后兼容性，对于接受 \texttt{*args} 的函数同样关键（参见 Item 34「Reduce Visual Noise with Variable Positional Arguments（用可变位置参数减少视觉噪音）」）。
+
+这种方法的唯一问题是，像 \texttt{period} 和 \texttt{units\_per\_kg} 这样的可选关键字参数，仍然可能被当作位置参数来指定：
+
+\begin{codebox}[python]
+pounds_per_hour = flow_rate(weight_diff, time_diff, 3600, 2.2)
+\end{codebox}
+
+按位置提供可选参数会造成困惑，因为无法清楚看出 \texttt{3600} 和 \texttt{2.2} 这两个值分别对应什么。最佳实践是始终使用关键字名来指定可选参数，而绝不要将它们作为位置参数传递。作为函数作者，你还可以要求所有调用方都使用这种更明确的「关键字」风格，以尽量减小潜在的错误（参见 Item 37「Enforce Clarity with Keyword-Only and Positional-Only Arguments（用仅限关键字与仅限位置参数强制清晰）」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 函数参数可以按位置或按关键字指定。
+\item 当仅用位置参数会令人困惑时，关键字能让每个参数的用途一目了然。
+\item 带有默认值的关键字参数，让你能够轻松地为函数添加新行为，而无需迁移所有现有的调用方。
+\item 可选的关键字参数应当始终用关键字传递，而不是用位置传递。
+\end{itemize}
+
+\section{Item 36: 用 None 与文档字符串指定动态默认参数}
+
+有时，把一个函数调用、一个新创建的对象，或一个容器类型（比如空列表）用作关键字参数（keyword argument）的默认值，会很有帮助。例如，假设我想打印日志消息，并在消息中标注所记录事件的时间。在默认情况下，我希望消息包含函数被调用时的时间。我可能会尝试下面这种写法，它假设关键字参数 \texttt{when} 的默认值会在每次函数被调用时重新求值：
+
+\begin{codebox}[python]
+from time import sleep
+from datetime import datetime
+def log(message, when=datetime.now()):
+    print(f"{when}: {message}")
+log("Hi there!")
+sleep(0.1)
+log("Hello again!")
+>>>
+2024-06-28 22:44:32.157132: Hi there!
+2024-06-28 22:44:32.157132: Hello again!
+\end{codebox}
+
+这并没有按预期工作。时间戳是相同的，因为 \texttt{datetime.now} 只在一次函数定义（在模块导入时）时执行。默认参数值每次模块加载只求值一次，这通常发生在程序启动时（详见 Item 98（"用动态导入惰性加载模块以减少启动时间"））。包含这段代码的模块被加载之后，\texttt{datetime.now()} 这个默认参数表达式就再也不会被求值了。
+
+在 Python 中实现期望结果的惯例是，提供一个 \texttt{None} 默认值，并在文档字符串（docstring）中说明实际行为（背景见 Item 118（"为每一个函数、类和模块编写文档字符串"））。当你的代码发现参数值为 \texttt{None} 时，就相应地分配默认值：
+
+\begin{codebox}[python]
+def log(message, when=None):
+    """Log a message with a timestamp.
+    Args:
+        message: Message to print.
+        when: datetime of when the message occurred.
+            Defaults to the present time.
+    """
+    if when is None:
+        when = datetime.now()
+    print(f"{when}: {message}")
+\end{codebox}
+
+现在时间戳就会不同了：
+
+\begin{codebox}[python]
+log("Hi there!")
+sleep(0.1)
+log("Hello again!")
+>>>
+2024-06-28 22:44:32.446842: Hi there!
+2024-06-28 22:44:32.551912: Hello again!
+\end{codebox}
+
+当参数是可变（mutable）对象时，把 \texttt{None} 用作默认参数值尤为重要。例如，假设我想加载一个以 JSON 数据编码的值；如果解码失败，我希望默认返回一个空字典：
+
+\begin{codebox}[python]
+import json
+def decode(data, default={}):
+    try:
+        return json.loads(data)
+    except ValueError:
+        return default
+\end{codebox}
+
+这里的问题与上面 \texttt{datetime.now} 示例中的问题类似。为 \texttt{default} 指定的字典会被所有对 \texttt{decode} 的调用共享，因为默认参数值只在模块加载时求值一次。这会导致极其令人意外的行为：
+
+\begin{codebox}[python]
+foo = decode("bad data")
+foo["stuff"] = 5
+bar = decode("also bad")
+bar["meep"] = 1
+print("Foo:", foo)
+print("Bar:", bar)
+>>>
+Foo: {'stuff': 5, 'meep': 1}
+Bar: {'stuff': 5, 'meep': 1}
+\end{codebox}
+
+你也许期望得到两个不同的字典，各自只有一个键和值。但是修改其中一个似乎也修改了另一个。罪魁祸首是 \texttt{foo} 和 \texttt{bar} 都等于 \texttt{decode} 函数的 \texttt{default} 参数。它们是同一个字典对象：
+
+\begin{codebox}[python]
+assert foo is bar
+\end{codebox}
+
+修复办法是把关键字参数的默认值设为 \texttt{None}，在函数文档字符串（docstring）中说明实际的默认值，并在函数体内当参数取值为 \texttt{None} 时采取相应的动作：
+
+\begin{codebox}[python]
+def decode(data, default=None):
+    """Load JSON data from a string.
+    Args:
+        data: JSON data to decode.
+        default: Value to return if decoding fails.
+            Defaults to an empty dictionary.
+    """
+    try:
+        return json.loads(data)
+    except ValueError:
+        if default is None:  # 在此检查
+            default = {}
+        return default
+\end{codebox}
+
+现在，运行与之前相同的测试代码会产生期望的结果：
+
+\begin{codebox}[python]
+foo = decode("bad data")
+foo["stuff"] = 5
+bar = decode("also bad")
+bar["meep"] = 1
+print("Foo:", foo)
+print("Bar:", bar)
+assert foo is not bar
+>>>
+Foo: {'stuff': 5}
+Bar: {'meep': 1}
+\end{codebox}
+
+这种方法同样适用于类型标注（type annotations，参见 Item 124（"借助 typing 进行静态分析以消灭缺陷"））。这里，\texttt{when} 参数被标记为具有一个可选的 \texttt{datetime} 值。因此，\texttt{when} 只有两种合法取值：\texttt{None} 或 \texttt{datetime} 对象：
+
+\begin{codebox}[python]
+def log_typed( message: str, when: datetime | None = None) ->
+None:
+    """Log a message with a timestamp.
+    Args:
+        message: Message to print.
+        when: datetime of when the message occurred.
+            Defaults to the present time.
+    """
+    if when is None:
+        when = datetime.now()
+    print(f"{when}: {message}")
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 默认参数值只会被求值一次：在函数定义、模块加载时进行。对于动态值（比如函数调用、新创建的对象和容器类型），这会导致奇怪的行为。
+\item 把 \texttt{None} 用作占位默认值，对应那些必须动态初始化实际默认值的关键字参数。在函数文档字符串中说明该参数的预期默认值。在函数体内检查参数值是否为 \texttt{None}，以触发正确的默认行为。
+\item 用 \texttt{None} 表示关键字参数的默认值，同样能正确地与类型标注（type annotations）配合使用。
+\end{itemize}
+
+\section{Item 37: 用仅限关键字参数与仅限位置参数增强代码清晰度}
+
+按关键字传递参数是 Python 函数（function）的一项强大特性（参见 Item 35「用关键字参数提供可选行为」）。关键字参数（keyword argument）让你能够编写出灵活的函数，在许多使用场景下，代码的新读者都能清楚地理解其含义。例如，假设我想在计算一个数除以另一个数时，特别小心地处理一些特殊情况。有时，我想忽略 \texttt{ZeroDivisionError} 异常（exception）并返回无穷大（infinity）；另一些时候，我想忽略 \texttt{OverflowError} 异常并返回零。下面我定义一个具备这些选项的函数：
+
+\begin{codebox}[python]
+def safe_division(
+    number,
+    divisor,
+    ignore_overflow,
+    ignore_zero_division,
+):
+    try:
+        return number / divisor
+    except OverflowError:
+        if ignore_overflow:
+            return 0
+        else:
+            raise
+    except ZeroDivisionError:
+        if ignore_zero_division:
+            return float("inf")
+        else:
+            raise
+\end{codebox}
+
+使用这个函数很简单直接。下面这次调用忽略了除法产生的 \texttt{float} 溢出（overflow），并返回零：
+
+\begin{codebox}[python]
+result = safe_division(1.0, 10**500, True, False)
+print(result)
+>>>
+0
+\end{codebox}
+
+这次调用忽略了除以零产生的错误并返回无穷大：
+
+\begin{codebox}[python]
+result = safe_division(1.0, 0, False, True)
+print(result)
+>>>
+inf
+\end{codebox}
+
+问题在于，这两个控制异常处理行为的布尔（Boolean）参数很容易在位置上被搞混。这会轻易引发难以追踪的 bug。提升这段代码可读性的一种方式是使用关键字参数。借助默认关键字参数（参见 Item 36「用 \texttt{None} 和文档字符串（docstring）指定动态默认参数」），这个函数可以格外谨慎，并始终重新抛出异常：
+
+\begin{codebox}[python]
+def safe_division_b(
+    number,
+    divisor,
+    ignore_overflow=False,       # 已修改
+    ignore_zero_division=False,  # 已修改
+):
+    ...
+\end{codebox}
+
+然后，调用者可以使用关键字参数来指定想为特定操作设置哪些忽略标志，从而覆盖默认行为：
+
+\begin{codebox}[python]
+result = safe_division_b(1.0, 10**500, ignore_overflow=True)
+print(result)
+result = safe_division_b(1.0, 0, ignore_zero_division=True)
+print(result)
+>>>
+0
+inf
+\end{codebox}
+
+问题在于，由于这些关键字参数属于可选行为，没有任何东西强制函数的调用者为了清晰而使用关键字参数。即便有了 \texttt{safe\_division\_b} 的新定义，我仍然可以用旧的位置参数方式调用它：
+
+\begin{codebox}[python]
+assert safe_division_b(1.0, 10**500, True, False) == 0
+\end{codebox}
+
+对于这类复杂函数，更好的做法是要求调用者明确其意图，方法就是用仅限关键字参数（keyword-only argument）来定义函数。这类参数只能以关键字方式提供，绝不能以位置方式提供。
+
+下面，我重新定义 \texttt{safe\_division} 函数以接受仅限关键字参数。参数列表中的 \texttt{*} 符号表示位置参数的结束与仅限关键字参数的开始（\texttt{*args} 也有同样的效果；参见 Item 34「用可变位置参数（variable positional argument）减少视觉噪声」）：
+
+\begin{codebox}[python]
+def safe_division_c(
+    number,
+    divisor,
+    *,  # 新增
+    ignore_overflow=False,
+    ignore_zero_division=False,
+):
+    ...
+\end{codebox}
+
+现在，用对应关键字参数的位置参数来调用该函数是不行的：
+
+\begin{codebox}[python]
+safe_division_c(1.0, 10**500, True, False)
+>>>
+Traceback ...
+TypeError: safe_division_c() takes 2 positional arguments but 4
+'were given
+\end{codebox}
+
+但关键字参数及其默认值会如预期那样工作（在一个场景下忽略异常，在另一个场景下抛出异常）：
+
+\begin{codebox}[python]
+result = safe_division_c(1.0, 0, ignore_zero_division=True)
+assert result == float("inf")
+try:
+    result = safe_division_c(1.0, 0)
+except ZeroDivisionError:
+    pass  # 预期
+\end{codebox}
+
+然而，\texttt{safe\_division\_c} 版本的这个函数仍然存在问题：调用者可以用位置与关键字的混合方式来指定前两个必需的参数（\texttt{number} 与 \texttt{divisor}）：
+
+\begin{codebox}[python]
+assert safe_division_c(number=2, divisor=5) == 0.4
+assert safe_division_c(divisor=5, number=2) == 0.4
+assert safe_division_c(2, divisor=5) == 0.4
+\end{codebox}
+
+之后，我可能会因为需求扩展，甚至仅仅因为个人风格偏好改变，而决定更改这两个参数的名称：
+
+\begin{codebox}[python]
+def safe_division_d(
+    numerator,    # 已修改
+    denominator,  # 已修改
+    *,
+    ignore_overflow=False,
+    ignore_zero_division=False
+):
+    ...
+\end{codebox}
+
+不幸的是，这个看似表面的改动会破坏所有使用关键字指定 \texttt{number} 或 \texttt{divisor} 参数的既有调用者：
+
+\begin{codebox}[python]
+safe_division_d(number=2, divisor=5)
+>>>
+Traceback ...
+TypeError: safe_division_d() got an unexpected keyword argument
+''number'
+\end{codebox}
+
+这尤其成问题，因为我从未打算让 \texttt{number} 和 \texttt{divisor} 这两个关键字成为该函数的显式接口（interface）的一部分。它们只是我为实现而选用的方便的形参（parameter）名称，我并不期望任何人显式地依赖它们。
+
+Python 3.8 引入了一个针对该问题的解决方案，称为仅限位置参数（positional-only argument）。这些参数只能以位置方式提供，绝不能以关键字方式提供（与上述仅限关键字参数正好相反）。
+
+下面，我重新定义 \texttt{safe\_division} 函数，让前两个必需形参使用仅限位置参数。参数列表中的 \texttt{/} 符号表示仅限位置参数的结束位置：
+
+\begin{codebox}[python]
+def safe_division_e(
+    numerator,
+    denominator,
+    /,  # 新增
+    *,
+    ignore_overflow=False,
+    ignore_zero_division=False,
+):
+    ...
+\end{codebox}
+
+我可以验证，当必需参数以位置方式提供时，这个函数能正常工作：
+
+\begin{codebox}[python]
+assert safe_division_e(2, 5) == 0.4
+\end{codebox}
+
+但如果对仅限位置的形参使用了关键字，就会抛出异常：
+
+\begin{codebox}[python]
+safe_division_e(numerator=2, denominator=5)
+>>>
+Traceback ...
+TypeError: safe_division_e() got some positional-only arguments
+'passed as keyword arguments: 'numerator, denominator'
+\end{codebox}
+
+现在，我可以确信，\texttt{safe\_division\_e} 函数定义中的前两个必需位置参数已经与调用者解耦。即便我再次更改这些形参的名称，也不会破坏任何人的代码。
+
+仅限关键字与仅限位置参数带来的一个值得注意的后果是，参数列表中 \texttt{/} 与 \texttt{*} 符号之间的任何形参名称，既可以通过位置也可以通过关键字来传递（这也是 Python 中所有函数参数的默认行为）。取决于你的 API 风格与需求，同时允许两种参数传递方式可以提高可读性并减少冗余。例如，这里我给 \texttt{safe\_division} 增加了另一个可选形参，让调用者能够指定在结果四舍五入（rounding）时使用多少位小数：
+
+\begin{codebox}[python]
+def safe_division_f(
+    numerator,
+    denominator,
+    /,
+    ndigits=10,  # 已修改
+    *,
+    ignore_overflow=False,
+    ignore_zero_division=False,
+):
+    try:
+        fraction = numerator / denominator  # 已修改
+        return round(fraction, ndigits)     # 已修改
+    except OverflowError:
+        if ignore_overflow:
+            return 0
+        else:
+            raise
+    except ZeroDivisionError:
+        if ignore_zero_division:
+            return float("inf")
+        else:
+            raise
+\end{codebox}
+
+现在，我可以用下面所有这些不同的方式来调用这个函数的新版本，因为 \texttt{ndigits} 是一个既可以通过位置也可以通过关键字传递的可选形参：
+
+\begin{codebox}[python]
+result = safe_division_f(22, 7)
+print(result)
+result = safe_division_f(22, 7, 5)
+print(result)
+result = safe_division_f(22, 7, ndigits=2)
+print(result)
+>>>
+3.1428571429
+3.14286
+3.14
+\end{codebox}
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 仅限关键字参数强制调用者以关键字（而非位置）方式提供某些参数，这能让函数调用的意图更清晰。仅限关键字参数定义在参数列表中 \texttt{*} 符号之后（无论该符号单独出现，还是作为 \texttt{*args} 这类可变参数的一部分）。
+\item 仅限位置参数确保调用者无法使用关键字来提供某些形参，这有助于降低耦合（coupling）。仅限位置参数定义在参数列表中单个 \texttt{/} 符号之前。
+\item 参数列表中 \texttt{/} 与 \texttt{*} 字符之间的形参，既可以通过位置也可以通过关键字提供，这也是 Python 形参的默认行为。
+\end{itemize}
+
+\section{Item 38: 用 functools.wraps 定义函数装饰器}
+
+Python 为可应用于函数的装饰器（decorator）提供了专门的语法。装饰器有能力在它所包装的函数每次被调用之前和之后运行额外的代码。这意味着装饰器能够访问并修改输入参数、返回值，以及所抛出的异常。这些能力可用于强制语义约束、调试、注册函数等场景，用途广泛。
+
+举例来说，假设我想打印一次函数调用的参数与返回值。这在调试某个递归函数所产生的嵌套调用栈时尤其有用（记录异常同样会有帮助，参见 Item 86「理解 \texttt{Exception} 与 \texttt{BaseException} 的区别」）。下面，我借助 \texttt{*args} 与 \texttt{**kwargs}（参见 Item 34「用可变位置参数减少视觉噪声」以及 Item 35「用关键字参数提供可选行为」）把全部参数透传给被包装的函数，从而定义了这样一个装饰器：
+
+\begin{codebox}[python]
+def trace(func):
+    def wrapper(*args, **kwargs):
+        args_repr = repr(args)
+        kwargs_repr = repr(kwargs)
+        result = func(*args, **kwargs)
+        print(f"{func.__name__}"
+              f"({args_repr}, {kwargs_repr}) "
+              f"-> {result!r}")
+        return result
+    return wrapper
+\end{codebox}
+
+我可以使用 \texttt{@} 符号把这个装饰器应用到某个函数上：
+
+\begin{codebox}[python]
+@trace
+def fibonacci(n):
+    """Return the n-th Fibonacci number"""
+    if n in (0, 1):
+        return n
+    return fibonacci(n - 2) + fibonacci(n - 1)
+\end{codebox}
+
+使用 \texttt{@} 符号，等价于把装饰器作用在它所包装的函数上，并将返回值赋回同一作用域内的原函数名：
+
+\begin{codebox}[python]
+fibonacci = trace(fibonacci)
+\end{codebox}
+
+经过装饰的函数会在 \texttt{fibonacci} 运行前后执行 \texttt{wrapper} 中的代码。它会在递归栈的每一层打印出参数和返回值：
+
+\begin{codebox}[python]
+fibonacci(4)
+>>>
+fibonacci((0,), {}) -> 0
+fibonacci((1,), {}) -> 1
+fibonacci((2,), {}) -> 1
+fibonacci((1,), {}) -> 1
+fibonacci((0,), {}) -> 0
+fibonacci((1,), {}) -> 1
+fibonacci((2,), {}) -> 1
+fibonacci((3,), {}) -> 2
+fibonacci((4,), {}) -> 3
+\end{codebox}
+
+这能正常工作，但它带来了一个非有意的副作用。装饰器所返回的值——也就是上面被调用的那个函数——并不认为自己的名字是 \texttt{fibonacci}：
+
+\begin{codebox}[python]
+print(fibonacci)
+>>>
+<function trace.<locals>.wrapper at 0x104a179c0>
+\end{codebox}
+
+造成这一现象的原因并不难理解。\texttt{trace} 函数返回的是在其函数体内定义的 \texttt{wrapper}。由于装饰器的作用，正是这个 \texttt{wrapper} 函数被赋给了外围模块里的 \texttt{fibonacci} 这个名字。这种行为是有问题的，因为它会破坏那些做内省（introspection）的工具，比如调试器（参见 Item 114「考虑用 \texttt{pdb} 进行交互式调试」）。
+
+例如，当对被装饰过的 \texttt{fibonacci} 函数调用内置的 \texttt{help} 函数时，它毫无用处。它本应打印出上面定义的文档字符串（\texttt{"""Return the n-th Fibonacci number"""}），但它没有：
+
+\begin{codebox}[python]
+help(fibonacci)
+>>>
+Help on function wrapper in module __main__:
+wrapper(*args, **kwargs)
+\end{codebox}
+
+另一个问题是，对象序列化器（参见 Item 107「用 \texttt{copyreg} 让 \texttt{pickle} 序列化可维护」）也会失效，因为它们无法确定被装饰的原始函数的位置：
+
+\begin{codebox}[python]
+import pickle
+pickle.dumps(fibonacci)
+>>>
+Traceback ...
+AttributeError: Can't pickle local object 'trace.<locals>.
+'wrapper'
+\end{codebox}
+
+解决办法是使用内置模块 \texttt{functools} 中的 \texttt{wraps} 辅助函数。它本身是一个用来帮你编写装饰器的装饰器。当你把它应用到 \texttt{wrapper} 函数上时，它会把内部函数的所有重要元数据复制到外部函数上。下面，我用 \texttt{wraps} 重新定义了 \texttt{trace} 装饰器：
+
+\begin{codebox}[python]
+from functools import wraps
+def trace(func):
+    @wraps(func)  # Changed
+    def wrapper(*args, **kwargs):
+        ...
+    return wrapper
+
+@trace
+def fibonacci(n):
+    ...
+\end{codebox}
+
+现在，即便函数已经被装饰，运行 \texttt{help} 函数也能得到预期的结果：
+
+\begin{codebox}[python]
+help(fibonacci)
+>>>
+Help on function fibonacci in module __main__:
+fibonacci(n)
+    Return the n-th Fibonacci number
+\end{codebox}
+
+\texttt{pickle} 对象序列化器也能正常工作了：
+
+\begin{codebox}[python]
+print(pickle.dumps(fibonacci))
+>>>
+b'\x80\x04\x95\x1a\x00\x00\x00\x00\x00\x00\x00\x8c\x08__main__\
+'x94\x8c\tfibonacci\x94\x93\x94.'
+\end{codebox}
+
+除了这些例子，Python 函数还有许多其他标准属性（例如 \texttt{\_\_name\_\_}、\texttt{\_\_module\_\_}、\texttt{\_\_annotations\_\_}），为了保持该语言中函数的接口一致，这些属性都必须被保留。使用 \texttt{wraps} 能确保你始终获得正确的行为。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item 在 Python 中，装饰器是一种语法，允许一个函数在运行时修改另一个函数。
+\item 使用装饰器会在做内省的工具（如调试器）中引发奇怪的行为。
+\item 在你定义自己的装饰器时，应使用内置模块 \texttt{functools} 中的 \texttt{wraps} 装饰器，以避免任何问题。
+\end{itemize}
+
+\section{Item 39: 优先用 functools.partial 而非 lambda 表达式来编写胶水函数}
+
+Python 中许多 API 都把简单的函数作为其接口的一部分来接受（参见 Item 100「用 \texttt{key} 参数按复杂条件排序」、Item 27「优先用 \texttt{defaultdict} 而非 \texttt{setdefault} 处理内部状态中的缺失项」，以及 Item 24「考虑用 \texttt{itertools} 处理迭代器与生成器」）。然而，这些接口有时会让人感到别扭，因为它们可能并不能完全满足你的需求。
+
+举例来说，内置模块 \texttt{functools} 中的 \texttt{reduce} 函数允许你从一个近乎无限的值可迭代对象中计算出单个结果。这里，我用 \texttt{reduce} 来计算多个对数尺度数值之和（这等价于将它们相乘）：
+
+\begin{codebox}[python]
+def log_sum(log_total, value):
+    log_value = math.log(value)
+    return log_total + log_value
+
+result = functools.reduce(log_sum, [10, 20, 40], 0)
+print(math.exp(result))
+>>>
+8000.0
+\end{codebox}
+
+问题在于，你并不总是拥有一个像 \texttt{log\_sum} 这样、恰好符合 \texttt{reduce} 所需函数签名的函数。比如说，设想你只是把参数的顺序颠倒了——反正这是个随意的选择——让 \texttt{value} 在前、\texttt{log\_total} 在后。你该如何轻松地把这个函数套进所需的接口？
+
+\begin{codebox}[python]
+def log_sum_alt(value, log_total):  # Changed
+    ...
+\end{codebox}
+
+一种解决办法是在表达式里定义一个 \texttt{lambda} 函数，把输入参数的顺序重新排列以匹配 \texttt{reduce} 的要求：
+
+\begin{codebox}[python]
+result = functools.reduce(
+    lambda total, value: log_sum_alt(value, total),  # Reordered
+    [10, 20, 40],
+    0,
+)
+\end{codebox}
+
+对于一次性使用，像这样创建一个 \texttt{lambda} 并无不可。但如果你发现自己反复这样做并复制代码，那就值得另外定义一个参数顺序已重新排列的辅助函数，以便多次调用：
+
+\begin{codebox}[python]
+def log_sum_for_reduce(total, value):
+    return log_sum_alt(value, total)
+\end{codebox}
+
+另一种函数接口不匹配的情形，是你需要额外传递一些信息供处理过程使用。例如，假设我想自行选择对数的底数，而不是始终使用自然对数：
+
+\begin{codebox}[python]
+def logn_sum(base, logn_total, value):  # New first parameter
+    logn_value = math.log(value, base)
+    return logn_total + logn_value
+\end{codebox}
+
+为了把这个函數传给 \texttt{reduce}，我需要想办法为每次调用都提供 \texttt{base} 参数。但 \texttt{reduce} 并没有给我一个简便的途径来做这件事。同样，\texttt{lambda} 可以帮上忙，它让我能先指定一个参数，再把其余参数透传过去。这里，我始终以 \texttt{10} 作为 \texttt{logn\_sum} 的第一个参数，从而计算以 10 为底的对数：
+
+\begin{codebox}[python]
+result = functools.reduce(
+    lambda total, value: logn_sum(10, total, value),  # Changed
+    [10, 20, 40],
+    0,
+)
+print(math.pow(10, result))
+>>>
+8000.000000000004
+\end{codebox}
+
+这种把某些参数固定为特定值、同时让其余参数正常传递的模式，在函数式风格的代码中相当常见。这种技巧通常被称为柯里化（Currying）或偏函数应用（partial application）。内置模块 \texttt{functools} 提供了 \texttt{partial} 函数，让这件事变得简单且更具可读性。它把要被偏应用的函数作为第一个参数，后面跟上被固定的位置参数：
+
+\begin{codebox}[python]
+result = functools.reduce(
+    functools.partial(logn_sum, 10),  # Changed
+    [10, 20, 40],
+    0,
+)
+\end{codebox}
+
+\texttt{partial} 还允许你轻松地固定关键字参数（相关背景参见 Item 35「用关键字参数提供可选行为」以及 Item 37「用仅关键字参数和仅位置参数强化清晰度」）。例如，设想 \texttt{logn\_sum} 函数把 \texttt{base} 作为一个仅关键字参数来接受，就像这样：
+
+\begin{codebox}[python]
+def logn_sum_last(logn_total, value, *, base=10):  # New kwarg
+    logn_value = math.log(value, base)
+    return logn_total + logn_value
+\end{codebox}
+
+这里，我用 \texttt{partial} 把 \texttt{base} 的值固定为欧拉数：
+
+\begin{codebox}[python]
+import math
+log_sum_e = functools.partial( logn_sum_last,
+base=math.e)  # Pinned `base`
+print(log_sum_e(3, math.e**10))
+>>>
+13.0
+\end{codebox}
+
+用 \texttt{lambda} 表达式也能实现相同的行为，但那样既啰嗦又容易出错：
+
+\begin{codebox}[python]
+log_sum_e_alt = lambda *a, base=math.e, **kw: \
+    logn_sum_last(*a, base=base, **kw)
+\end{codebox}
+
+\texttt{partial} 还允许你检查哪些参数已经被提供，以及被包装的函数是什么，这对调试很有帮助：
+
+\begin{codebox}[python]
+print(log_sum_e.args, log_sum_e.keywords, log_sum_e.func)
+>>>
+() {'base': 2.718281828459045} <function logn_sum_last at
+'0x1033534c0>
+\end{codebox}
+
+一般而言，只要 \texttt{partial} 能满足你的用例，就应该优先使用它，因为它有这些额外的便利之处。不过，\texttt{partial} 无法彻底重排参数顺序，因此当你需要重排被包装函数的参数时，\texttt{lambda} 才是更优的选择。
+
+在很多情况下，即便一个 \texttt{lambda} 或 \texttt{partial} 实例仍然不够，尤其是当你需要在一个简单函数接口中访问或修改某些状态时。所幸，Python 还提供了额外的机制（包括闭包（closure））来实现这一点（参见 Item 33「了解闭包如何与变量作用域及 \texttt{nonlocal} 交互」以及 Item 48「对简单接口优先接受函数而非类」）。
+
+\subsection{需要记住的要点}
+
+\begin{itemize}
+\item \texttt{lambda} 表达式可以通过重排参数或固定某些参数值，简洁地让两套函数接口相互兼容。
+\item 内置模块 \texttt{functools} 中的 \texttt{partial} 函数是一个通用工具，用于创建带有固定位置参数和关键字参数的函数。
+\item 如果你需要重排被包装函数的参数，就使用 \texttt{lambda} 而非 \texttt{partial}。
+\end{itemize}
